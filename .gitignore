@@ -1,0 +1,6 @@
+data/nrdb-cache.json
+data/*.tmp
+data/backups/
+netrunner.exe
+data/icons/
+netrunner.*.exe

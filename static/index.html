@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Netrunner Collection</title>
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="/api/icons.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#collection">Netrunner Collection</a>
+  <nav>
+    <a href="#collection" data-nav="collection">Collection</a>
+    <a href="#sets" data-nav="sets">Add by set</a>
+    <a href="#decks" data-nav="decks">Decks</a>
+  </nav>
+  <span id="save-status" class="save-status"></span>
+  <button id="lock-btn" class="lock-btn" data-act="lock"></button>
+  <details class="menu">
+    <summary title="More">⋯</summary>
+    <div class="menu-body">
+      <div class="menu-label">Products shown</div>
+      <div id="menu-publisher" class="menu-pub"></div>
+      <button data-act="welcome">Run setup again</button>
+      <button data-act="refresh-db">Refresh card data from NetrunnerDB</button>
+      <button data-act="export">Export collection (JSON)</button>
+      <button data-act="import">Import collection (JSON)…</button>
+      <div class="menu-note" id="db-note"></div>
+    </div>
+  </details>
+</header>
+<main id="app"><p class="loading">Loading card data from NetrunnerDB…</p></main>
+<div id="modal" class="modal" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<input type="file" id="import-file" accept=".json,application/json" hidden>
+<script src="app.js"></script>
+</body>
+</html>
