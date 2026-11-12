@@ -431,6 +431,8 @@ body.locked .prod-row .stepper button, body.locked .prod-clear { display: none; 
 @media (max-width: 640px) {
   /* A bottom sheet fills the width: the buttons sit beside the image instead, in the space either side of it. */
   .modal-wrap { display: block; width: 100%; max-height: none; }
+  /* One height for every card, so the image and its buttons stay put while stepping; longer text scrolls. */
+  .modal-wrap .modal-box { height: 92vh; height: 92dvh; }
   .mnav.out, .mnav-gap { display: none; }
   .mnav.in { display: grid; position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 68px; }
   .mnav.in.prev { left: -64px; }
