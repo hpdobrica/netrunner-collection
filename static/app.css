@@ -417,20 +417,24 @@ body.locked .prod-row .stepper button, body.locked .prod-clear { display: none; 
 /* the Collection row picked for typing counts */
 #items tr.focus td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
-/* card details: previous / next card, over the image's edges */
+/* card details: previous / next card */
+.modal-wrap { display: flex; align-items: center; gap: 12px; width: min(1064px, 100%); max-height: calc(100vh - 32px); }
+.modal-wrap .modal-box { flex: 1; min-width: 0; width: auto; }
 .mnav {
-  position: absolute; top: 50%; z-index: 2; transform: translateY(-50%); width: 36px; height: 56px; min-height: 0; padding: 0;
-  border: 0; border-radius: 6px; background: #0008; color: #fff; font-size: 26px; line-height: 1; opacity: .75;
+  flex: none; display: grid; place-items: center; width: 52px; height: 76px; min-height: 0; padding: 0 0 4px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font-size: 38px; line-height: 1;
 }
-.mnav:hover:not(:disabled) { opacity: 1; border: 0; }
-.mnav.prev { left: 4px; }
-.mnav.next { right: 4px; }
+.mnav:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.mnav-gap { flex: none; width: 52px; }
+.mnav.in { display: none; }
 .mcount { font-size: 12px; margin-bottom: 2px; }
 @media (max-width: 640px) {
-  /* The image is narrow on phones: the buttons sit beside it, in the empty space. */
+  /* A bottom sheet fills the width: the buttons sit beside the image instead, in the space either side of it. */
+  .modal-wrap { display: block; width: 100%; max-height: none; }
+  .mnav.out, .mnav-gap { display: none; }
+  .mnav.in { display: grid; position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 68px; }
+  .mnav.in.prev { left: -64px; }
+  .mnav.in.next { right: -64px; }
   .modal-img { overflow: visible; }
   .modal-img img { border-radius: 10px; }
-  .mnav { background: var(--panel2); color: var(--text); opacity: 1; width: 44px; }
-  .mnav.prev { left: -56px; }
-  .mnav.next { right: -56px; }
 }

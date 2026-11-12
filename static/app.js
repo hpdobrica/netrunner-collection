@@ -1683,12 +1683,20 @@ function renderModal() {
   const decks = S.decks.map(d => ({ d, e: deckEntries(d).find(e => e.key === t.key) })).filter(x => x.e);
   const c = t.newest;
   const seq = UI.modalSeq || [], i = UI.modalIdx ?? -1;
-  const step = (d, label, ch) => seq[i + d] ? `<button class="mnav ${d < 0 ? 'prev' : 'next'}" data-act="modal-step" data-d="${d}" aria-label="${label}" title="${label} (${d < 0 ? '←' : '→'})">${ch}</button>` : '';
+  // Previous / next: on the backdrop either side of the box (.out), or beside the image on phones (.in), where a
+  // bottom sheet leaves no room outside. A gap keeps the box centred when there is no previous or next.
+  const step = (d, where) => {
+    const label = d < 0 ? 'Previous card' : 'Next card';
+    if (!seq[i + d] || i < 0) return where === 'out' ? '<span class="mnav-gap"></span>' : '';
+    return `<button class="mnav ${where} ${d < 0 ? 'prev' : 'next'}" data-act="modal-step" data-d="${d}" aria-label="${label}" title="${label} (${d < 0 ? '←' : '→'})">${d < 0 ? '‹' : '›'}</button>`;
+  };
   el.hidden = false;
   el.innerHTML = `
+  <div class="modal-wrap">
+  ${step(-1, 'out')}
   <div class="modal-box" role="dialog" aria-label="${esc(t.title)}">
     <button class="close" data-act="modal-close" aria-label="Close">×</button>
-    <div class="modal-img">${cardImg(shown.code, t.title, 'large')}${i >= 0 ? step(-1, 'Previous card', '‹') + step(1, 'Next card', '›') : ''}</div>
+    <div class="modal-img">${cardImg(shown.code, t.title, 'large')}${step(-1, 'in')}${step(1, 'in')}</div>
     <div class="modal-body">
       ${i >= 0 && seq.length > 1 ? `<div class="mcount muted">${i + 1} of ${seq.length}</div>` : ''}
       <h2>${esc(t.title)}</h2>
@@ -1709,6 +1717,8 @@ function renderModal() {
         : '<p class="muted">Not in any deck.</p>'}
       <p><a href="https://netrunnerdb.com/en/card/${shown.code}" target="_blank" rel="noopener">View on NetrunnerDB ↗</a></p>
     </div>
+  </div>
+  ${step(1, 'out')}
   </div>`;
 }
 
@@ -2118,7 +2128,8 @@ document.addEventListener('click', e => {
     act[el.dataset.act](el, e);
     return;
   }
-  if (e.target.id === 'modal') act['modal-close']();
+  // A click on the backdrop (or the space around the box and its buttons) closes the pop-up.
+  if (e.target.id === 'modal' || e.target.classList?.contains('modal-wrap')) act['modal-close']();
 });
 
 document.addEventListener('change', e => {
