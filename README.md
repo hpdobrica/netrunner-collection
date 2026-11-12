@@ -6,7 +6,8 @@ Card data comes from NetrunnerDB.
 
 The app is a static web page (`static/`): no server of its own, no build step. It keeps your collection in
 your browser, fetches card data from NetrunnerDB directly, and can be installed to a phone's home screen or a
-desktop and used offline. The plan is in [docs/pwa-spec.md](docs/pwa-spec.md).
+desktop and used offline. The plan is in [docs/pwa-spec.md](docs/pwa-spec.md); the statistics screen in
+[docs/stats-spec.md](docs/stats-spec.md).
 
 **Use it at https://netrunner-collection.dobrica.sh/**
 
@@ -70,6 +71,11 @@ DevTools → Application → Service workers.
 - Card data from NetrunnerDB is cached in the browser and refreshed in the background once it's a week old.
   **Refresh card data** in the ⋯ menu fetches it now, e.g. when a new set comes out.
 
+**The backup format is in use: people have backup files and rely on restoring them.** Any change to the stored
+collection or the backup file must keep it compatible: every existing backup must still restore
+(extend `migrate()`, never drop a field it reads), and a new field must be optional. Breaking compatibility is not
+an option.
+
 Owned counts are stored per printing (NetrunnerDB card code), each with how many of those copies are
 alt art. Decks are lists of cards. A deck marked **Built** is physically assembled, so its cards are borrowed
 and no longer free. Reprints of the same title count together when checking a deck.
@@ -96,7 +102,9 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
 - **Setup**: tick the products you own complete (×1, ×2…) and the ones you only have part of. You can also
   paste starter/printed deck lists. Then you're walked through each partial product.
 - **Add by set**: a grid per product in release order. Click or use the keyboard: arrows, `0`–`9`
-  for the count, `A` / `Shift+A` for alt art, `Enter` to mark the product done and move on.
+  for the count, `A` / `Shift+A` for alt art, `Enter` for the next product. Each product shows your copies against
+  one complete box, and its dot in the side list is empty, half or green for none, some or a complete box.
+  *N missing* shows only the cards you're short of.
 - **Collection**: a list of all titles (no images, so it's quick on a phone). Search and filter, adjust counts,
   open a card to see it and set per-printing counts and alt art.
   The set filter has one entry per set symbol, so Downfall and Uprising are both Ashes (cards 1–130).
@@ -108,6 +116,9 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   it's free, held by another built deck, or has to be printed. Save it as a deck, then **Build** it to
   borrow the cards. **Print list** shows what you're short of, ready to copy. **I printed them** records proxies as part of that deck, so they never count
   against your collection.
+- **Stats**: the shape of the collection at a glance: totals, how complete each set is (one box as sold is 100%;
+  *Count reprints* also counts copies from other printings), how much is tied up in built decks, breakdowns by
+  faction and type, and a shopping list. Tap a bar to go to that set, deck or filtered list. Nothing new is stored.
 - **Several tabs**: a change in one tab shows up in the others. A tab that somehow missed it reloads instead
   of overwriting the newer data.
 
