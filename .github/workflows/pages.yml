@@ -22,11 +22,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       # Pinned to commits, not tags: a tag can be moved to other code, a commit can't. Update by hand.
+      # The repository requires this of every action, including ones an action uses itself: upload-pages-artifact
+      # v3 called upload-artifact by tag and was refused; v4 pins it.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: static
       - id: deployment
