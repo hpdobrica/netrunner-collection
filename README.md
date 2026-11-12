@@ -101,15 +101,20 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   onward, and new cycles count as Null Signal automatically. Cards only the hidden publisher printed are hidden too.
   Copies you own of a reprint count no matter which printing they are.
 - **Setup**: tick the products you own complete (×1, ×2…) and the ones you only have part of. You can also
-  paste starter/printed deck lists. Then you're walked through each partial product.
-- **Add by set** (*Add cards: By set* on Collection; with a set filter picked it opens that set): a grid per product in release order. Click or use the keyboard: arrows, `0`–`9`
-  for the count, `A` / `Shift+A` for alt art, `Enter` for the next product. Each product shows your copies against
-  one complete box, and its dot in the side list is empty, half or green for none, some or a complete box.
-  *N missing* shows only the cards you're short of.
-- **Collection**: a list of all titles (no images, so it's quick on a phone). Search and filter, adjust counts,
-  open a card to see it and set per-printing counts and alt art.
+  paste starter/printed deck lists. Then the cards of the partial products open in the Collection list, to set
+  one by one. Run again from the ⋯ menu, setup starts from the complete boxes you own.
+- **Add by set** (*Add cards: By set* on Collection): whole products only. Each shows the complete boxes you own
+  and how far you are into the next one (*1 box + 204/205 of another*). **+** adds a box's worth of every card;
+  **−** removes one, if you own a complete box; **Clear** sets every card to 0. Removing asks first if a built deck
+  would be left short or alt-art copies would go. A product's name opens its cards in the Collection list, and
+  *N missing* only the cards short of the next box.
+- **Collection**: a list with a row per printing (no images, so it's quick on a phone). The first column is the
+  set symbol and card number, so you know which box a card is filed in. Sorted by name, a card's printings sit
+  together; *N printings* lists the others. Click a column heading to sort, again to reverse; *Set* sorts the way
+  cards sit in a binder. Owned and Alt art are per printing. In decks and Free are per card (decks don't record
+  which printing went in): sorted by name they span the card's rows, otherwise they show muted as *3 of 10*.
   The set filter has one entry per set symbol, so Downfall and Uprising are both Ashes (cards 1–130).
-  **Sort by set number** lists cards by set and then card number, the way they sit in a binder.
+  To type counts, click a row, then `↑`/`↓` move, `0`–`9` set the count, `+`/`−` adjust, `A` / `Shift+A` alt art.
 - **Lock** (padlock at the top): stops count changes, so a stray tap can't edit your collection. Decks still work.
   The lock is saved with the collection, so it's still on next time and is part of backups.
   **Add cards: From a list** adds a new starter deck, trade or booster on top of what you have.

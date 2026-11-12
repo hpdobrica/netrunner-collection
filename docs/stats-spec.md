@@ -22,7 +22,7 @@ A Stats screen answers these at a glance, with a few simple charts.
   so no new dependency, no build step, nothing extra to precache.
 - It follows the same settings as the rest of the app: the publisher setting (All / Null Signal / FFG), and a
   *Hide rotated* toggle.
-- Tapping a chart takes you to the place where you can act on it, such as the set in *Add by set* or the filtered
+- Tapping a chart takes you to the place where you can act on it, such as a set's cards or the filtered
   Collection list.
 
 ## Non-goals (for now)
@@ -99,7 +99,7 @@ as it was sold.
   - each bar shows owned and missing, with `have / need · %` as text beside it;
   - each cycle heading has its own total bar.
 - **Sort:** release order (default), % complete, or most missing.
-- Tapping a set opens it in *Add by set*.
+- Tapping a set opens its cards in the Collection list.
 - *Hide sets I don't own* is on by default. Turned off, sets you own nothing of are shown, faded, in their usual
   order, so the gaps are visible.
 
@@ -143,7 +143,7 @@ This answers "what would help me most?". Two short lists, top 10 each, with *Sho
 - **Most needed for your decks:** titles you're short of across all saved decks, counting each title once at the
   most copies any one deck needs. Sorted by how many decks need them.
 - **Closest sets:** sets that are 80–99% complete, with how many cards are missing. Tapping one opens it in
-  *Add by set*.
+  the Collection list, showing only the cards short of a complete box.
 
 ## Empty and edge states
 
