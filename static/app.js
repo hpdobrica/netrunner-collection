@@ -40,20 +40,34 @@ const fname = f => (FACTIONS[f] || [f])[0];
 
 const DB = { titles: new Map(), titleList: [], byCode: new Map(), packs: [], packByCode: new Map(), cycles: new Map(), tpl: '' };
 
+// NetrunnerDB data goes into the page, so it is checked as it's loaded: codes are letters, digits and dashes
+// (they go into attributes, links and class names as they are), numbers are numbers, and the image template
+// points at NetrunnerDB's image server. Anything else is left out. Names and text are escaped where shown.
+const CODE = /^[\w-]{1,64}$/;
+const okCode = v => typeof v === 'string' && CODE.test(v);
+const okNum = v => v == null ? undefined : Number.isFinite(+v) && typeof v !== 'object' ? +v : undefined;
+const DEFAULT_TPL = 'https://card-images.netrunnerdb.com/v2/large/{code}.jpg';
+const okTpl = v => typeof v === 'string' && /^https:\/\/card-images\.netrunnerdb\.com\/[\w/.{}-]*\{code\}[\w/.{}-]*$/.test(v);
+
 function loadDB(raw) {
-  DB.tpl = raw.imageUrlTemplate || 'https://card-images.netrunnerdb.com/v2/large/{code}.jpg';
+  DB.tpl = okTpl(raw.imageUrlTemplate) ? raw.imageUrlTemplate : DEFAULT_TPL;
   DB.fetched = raw.fetched;
-  DB.cycles = new Map(raw.cycles.map(c => [c.code, { ...c, order: c.code === 'draft' ? 9999 : c.position }]));
-  const packs = raw.packs.map(p => ({ ...p, cycle: DB.cycles.get(p.cycle_code), cards: [] }))
+  const nums = (o, keys) => { for (const k of keys) o[k] = okNum(o[k]); return o; };
+  const cycles = raw.cycles.filter(c => okCode(c?.code)).map(c => nums({ ...c }, ['position']));
+  DB.cycles = new Map(cycles.map(c => [c.code, { ...c, order: c.code === 'draft' ? 9999 : c.position }]));
+  const packs = raw.packs.filter(p => okCode(p?.code) && okCode(p.cycle_code)).map(p => nums({ ...p }, ['position']))
+    .map(p => ({ ...p, cycle: DB.cycles.get(p.cycle_code), cards: [] }))
     .sort((a, b) => (a.cycle?.order ?? 9998) - (b.cycle?.order ?? 9998) || a.position - b.position);
   packs.forEach((p, i) => { p.order = i; p.publisher = FFG_CYCLES.has(p.cycle_code) ? 'ffg' : 'nsg'; });
   DB.packByCode = new Map(packs.map(p => [p.code, p]));
   DB.byCode = new Map();
   DB.titles = new Map();
   for (const c of raw.cards) {
-    const pack = DB.packByCode.get(c.pack_code);
-    if (!pack) continue;
-    const card = { ...c, pack, key: norm(c.stripped_title || c.title) };
+    const pack = DB.packByCode.get(c?.pack_code);
+    if (!pack || !okCode(c.code) || typeof c.title !== 'string') continue;
+    // Side, faction and type are short lowercase codes; they show as names, or as they are if unknown.
+    if (![c.side_code, c.faction_code, c.type_code].every(v => typeof v === 'string' && /^[a-z-]{1,40}$/.test(v))) continue;
+    const card = nums({ ...c, pack, key: norm(c.stripped_title || c.title) }, ['position', 'quantity', 'deck_limit', 'faction_cost']);
     DB.byCode.set(c.code, card);
     pack.cards.push(card);
     let t = DB.titles.get(card.key);
@@ -144,13 +158,48 @@ let S = null;
 let saveTimer = null, dirty = false, counted = false, base = null, flushing = Promise.resolve();
 
 // Brings a stored or restored collection (version 1 or 2) up to the current format.
+// A backup can come from anyone, so it is rebuilt field by field: every field the format has is kept, values of
+// the wrong kind are dropped or replaced by their default, and nothing else is copied. Counts become whole
+// numbers and deck ids safe characters, so they can go into the page as they are.
 function migrate(s) {
-  s = Object.assign({ owned: {}, decks: [], packStatus: {}, onboarded: false }, s);
-  s.version = 2;
-  s.meta = Object.assign({}, s.meta);
-  if (!s.onboarded && Object.keys(s.owned).length) s.onboarded = true;
-  return s;
+  s = isObj(s) ? s : {};
+  const out = { version: 2, owned: {}, decks: [], packStatus: {}, onboarded: s.onboarded === true, meta: {} };
+  for (const [code, o] of ownEntries(s.owned)) {
+    // An entry is { n, custom }; a bare number is read as n.
+    const n = count(isObj(o) ? o.n : o);
+    if (n) out.owned[code] = { n, custom: Math.min(n, count(o?.custom)) };
+  }
+  const ids = new Set();
+  for (const d of Array.isArray(s.decks) ? s.decks : []) {
+    if (!isObj(d)) continue;
+    let id = typeof d.id === 'string' && /^[\w-]{1,64}$/.test(d.id) && !ids.has(d.id) ? d.id : uid();
+    while (ids.has(id)) id = uid();
+    ids.add(id);
+    const deck = { id, name: str(d.name), built: d.built === true, cards: {}, proxies: {}, source: '', notes: str(d.notes) };
+    for (const [code, q] of ownEntries(d.cards)) if (count(q)) deck.cards[code] = count(q);
+    for (const [key, q] of ownEntries(d.proxies)) if (count(q)) deck.proxies[key] = count(q);
+    // Only the app sets source, always to a NetrunnerDB deck page.
+    if (typeof d.source === 'string' && /^https:\/\/netrunnerdb\.com\/[\w/-]*$/i.test(d.source)) deck.source = d.source;
+    if (isoDate(d.created)) deck.created = d.created;
+    out.decks.push(deck);
+  }
+  for (const [code, v] of ownEntries(s.packStatus)) if (v === 'partial' || v === 'done') out.packStatus[code] = v;
+  if (s.locked === true) out.locked = true;
+  if (['all', 'nsg', 'ffg'].includes(s.publisher)) out.publisher = s.publisher;
+  const m = isObj(s.meta) ? s.meta : {};
+  for (const k of ['updated', 'changed', 'lastBackup', 'firstUnbackedChange']) if (isoDate(m[k])) out.meta[k] = m[k];
+  if (count(m.changesSinceBackup)) out.meta.changesSinceBackup = count(m.changesSinceBackup);
+  if (!out.onboarded && Object.keys(out.owned).length) out.onboarded = true;
+  return out;
 }
+
+const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+// A plain object's own entries, without __proto__ (assigning it would change an object's prototype).
+const ownEntries = o => isObj(o) ? Object.entries(o).filter(([k]) => k !== '__proto__') : [];
+// A count: a whole number from 0 up to 99 999 (numbers written as text are read too), else 0.
+const count = v => { const x = typeof v === 'string' ? Number(v) : v; return typeof x === 'number' && x >= 1 ? Math.min(99999, Math.floor(x)) : 0; };
+const str = v => typeof v === 'string' ? v : '';
+const isoDate = v => typeof v === 'string' && v.length <= 40 && !Number.isNaN(Date.parse(v));
 
 // counts: the save changes the collection or decks, so it is a change a backup should cover.
 // Lock, publisher and similar settings pass false.
@@ -377,6 +426,8 @@ function parseDeckText(text) {
   for (const raw of text.split(/\r?\n/)) {
     let line = raw.replace(/[●•○◦★☆]/g, '').trim();
     if (!line) continue;
+    // No card line is this long. Matching very long lines takes seconds (the patterns below backtrack).
+    if (line.length > 300) { unknown.push(line.slice(0, 60) + '…'); continue; }
     let qty = 1, m, counted = false;
     if ((m = line.match(/^(\d+)\s*[x×]?\s+(.+)$/i))) { qty = +m[1]; line = m[2]; counted = true; }
     else if ((m = line.match(/^(.+?)\s+[x×]\s*(\d+)$/i))) { qty = +m[2]; line = m[1]; counted = true; }
@@ -403,10 +454,11 @@ async function parseDeckInput(text) {
   if (!r.ok || !j.data?.length) throw new Error('Deck not found on NetrunnerDB. Private decks must be shared to be readable.');
   const d = j.data[0];
   const cards = {}, unknown = [];
-  for (const [code, q] of Object.entries(d.cards)) {
-    if (DB.byCode.has(code)) cards[code] = q; else unknown.push(code);
+  for (const [code, q] of ownEntries(d.cards)) {
+    if (!DB.byCode.has(code)) unknown.push(code);
+    else if (count(q)) cards[code] = count(q);
   }
-  return { name: d.name, cards, unknown, source: 'https://' + m[0] };
+  return { name: str(d.name), cards, unknown, source: 'https://' + m[0] };
 }
 
 /* ---------- view state and routing ---------- */
@@ -429,7 +481,8 @@ const UI = {
 function route() {
   const [view, ...rest] = location.hash.slice(1).split('/');
   UI.view = view || (S.onboarded ? 'collection' : 'welcome');
-  UI.arg = decodeURIComponent(rest.join('/'));
+  // A link with a broken %-escape (e.g. #deck/%E0) would otherwise stop the app; its argument just isn't found.
+  try { UI.arg = decodeURIComponent(rest.join('/')); } catch { UI.arg = ''; }
   if (UI.view !== 'collection') UI.only = null;
   if (UI.view === 'sets' && !UI.arg) {
     const packs = visiblePacks();
@@ -1273,7 +1326,8 @@ function collectionFrom(changes, only = null) {
 /* ---------- card details modal ---------- */
 
 const SYMBOLS = { credit: '¢', click: '⏱', 'recurring-credit': '↺¢', subroutine: '↳', trash: '🗑', mu: 'MU', link: '⛓', interrupt: '⚡' };
-const cardText = s => (s || '').replace(/\[([a-z-]+)\]/g, (m, k) => SYMBOLS[k] ? `<span class="sym">${SYMBOLS[k]}</span>` : fname(k)).replace(/\n/g, '<br>');
+// Card text is HTML from NetrunnerDB: escaped, then the few tags it uses are let through again (no attributes).
+const cardText = s => esc(s).replace(/&lt;(\/?)(strong|em|ul|li)&gt;/g, '<$1$2>').replace(/\[([a-z-]+)\]/g, (m, k) => SYMBOLS[k] ? `<span class="sym">${SYMBOLS[k]}</span>` : fname(k)).replace(/\n/g, '<br>');
 
 function renderAddList(el) {
   el.hidden = false;
@@ -1588,16 +1642,18 @@ function backupNote() {
 
 // Accepts a backup file, or a version 1 export / collection.json from the Go version (the bare collection).
 function readBackup(data, file) {
-  if (data?.app === BACKUP_APP && data.collection) return { c: data.collection, date: data.exportedAt };
-  if (data?.owned && data.decks) return { c: data, date: data.meta?.updated || new Date(file.lastModified).toISOString() };
+  if (data?.app === BACKUP_APP && isObj(data.collection)) return { c: data.collection, date: isoDate(data.exportedAt) ? data.exportedAt : undefined };
+  if (isObj(data) && data.owned && data.decks) return { c: data, date: isoDate(data.meta?.updated) ? data.meta.updated : new Date(file.lastModified).toISOString() };
   throw new Error('That file is not a Netrunner Collection backup.');
 }
 
 async function restoreFile(file) {
   try {
     if (S.locked) throw new Error('The collection is locked. Unlock it before restoring a backup.');
-    const { c, date } = readBackup(JSON.parse(await file.text()), file);
-    if (!c.owned || !Array.isArray(c.decks)) throw new Error('That backup has no collection in it.');
+    const { c: raw, date } = readBackup(JSON.parse(await file.text()), file);
+    if (!isObj(raw.owned) || !Array.isArray(raw.decks)) throw new Error('That backup has no collection in it.');
+    // From here on only the checked copy is used.
+    const c = migrate(raw);
     const changed = S.meta.changed;
     const newer = changed && date && changed > date;
     const msg = [`Restore ${file.name}?`,
@@ -1611,7 +1667,7 @@ async function restoreFile(file) {
     // The safety copy is not a backup, so it doesn't reset the change counter.
     const now = new Date().toISOString();
     if (hasData) downloadBackup(backupName(now, '-before-restore'), now);
-    S = migrate(c);
+    S = c;
     // The device now matches the backup, so nothing is waiting to be backed up.
     Object.assign(S.meta, { changesSinceBackup: 0, firstUnbackedChange: null, lastBackup: date || now, changed: S.meta.changed || date || now });
     save(false);
