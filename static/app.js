@@ -418,7 +418,7 @@ const UI = {
   check: { text: '', result: null, error: '' },
   modal: null,
   // Stats screen options, remembered like the Collection filters.
-  stats: Object.assign({ side: '', hideRotated: false, reprints: false, sort: 'release', hideUnowned: false }, store.get('stats', {})),
+  stats: Object.assign({ side: '', hideRotated: false, reprints: false, sort: 'release', hideUnowned: true }, store.get('stats', {})),
   statsAll: {}, // shopping lists opened with Show all (this visit only)
   only: null, // { label, keys }: a Stats tap limiting the Collection list to some titles; cleared on leaving it
 };
@@ -749,8 +749,7 @@ function viewSets(app) {
             · <span class="pill ${status || 'todo'}">${status === 'done' ? 'Done' : status === 'partial' ? 'In progress' : 'Not started'}</span></div>
         </div>
         <div class="pack-actions">
-          <span class="muted">Own it complete:</span>
-          <span class="seg">${[1, 2, 3].map(k => `<button data-act="pack-fill" data-k="${k}">×${k}</button>`).join('')}</span>
+          <button data-act="pack-fill" data-k="1" title="Every card at least as many copies as came in the box">Own it complete</button>
           <button data-act="pack-fill" data-k="0">Clear</button>
           <button class="primary top-done" data-act="pack-done">${status === 'done' ? 'Next product →' : 'Mark done, next →'}</button>
         </div>
@@ -821,10 +820,11 @@ function nextPack() {
   const packs = visiblePacks();
   const i = packs.findIndex(p => p.code === UI.setsPack);
   const order = [...packs.slice(i + 1), ...packs.slice(0, i)];
-  // Only products you've started; untouched ones are ones you don't own, so don't march through them.
-  const next = order.find(p => S.packStatus[p.code] === 'partial');
+  // Products already in progress first, then the next one not done yet in release order.
+  const todo = order.filter(p => !(UI.setsHideRotated && p.cycle?.rotated));
+  const next = todo.find(p => S.packStatus[p.code] === 'partial') || todo.find(p => S.packStatus[p.code] !== 'done');
   if (next) location.hash = '#sets/' + next.code;
-  else { toast('All products in progress are done. Pick any other product from the list to add more.'); location.hash = '#collection'; }
+  else { toast('Every product is done. Pick any product from the list to change it.'); render(); }
 }
 
 function onSetsKey(e) {
@@ -1399,8 +1399,10 @@ const act = {
   'pack-fill': el => {
     const k = +el.dataset.k, pack = DB.packByCode.get(UI.setsPack);
     if (!k && !confirm(`Set every card in ${pack.name} to 0?`)) return;
-    for (const c of pack.cards) setOwn(c.code, (c.quantity || 1) * k);
-    if (k) S.packStatus[pack.code] = 'done';
+    // Complete: at least one box's worth of each card; copies beyond that are kept.
+    for (const c of pack.cards) setOwn(c.code, k ? Math.max(own(c.code).n, c.quantity || 1) : 0);
+    // Cleared: back to not started (setOwn would otherwise have marked it in progress).
+    if (k) S.packStatus[pack.code] = 'done'; else delete S.packStatus[pack.code];
     save();
     render();
   },

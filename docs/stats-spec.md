@@ -100,8 +100,8 @@ as it was sold.
   - each cycle heading has its own total bar.
 - **Sort:** release order (default), % complete, or most missing.
 - Tapping a set opens it in *Add by set*.
-- Sets you own nothing of are shown, faded, in their usual order, so the gaps are visible. *Hide sets I don't
-  own* hides them.
+- *Hide sets I don't own* is on by default. Turned off, sets you own nothing of are shown, faded, in their usual
+  order, so the gaps are visible.
 
 ### 3. Free vs in decks
 
