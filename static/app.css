@@ -128,7 +128,7 @@ main { padding: 16px; max-width: 1600px; margin: 0 auto; }
 /* locked collection: no count controls */
 .lock-note { display: none; margin: 0 0 8px; padding: 8px 12px; border-radius: 6px; background: var(--panel2); color: var(--muted); font-size: 13px; }
 body.locked .lock-note { display: block; }
-body.locked .stepper button:is([data-act="title-n"], [data-act="print-n"], [data-act="alt"]),
+body.locked .stepper button:is([data-act="title-n"], [data-act="title-alt"], [data-act="print-n"], [data-act="alt"]),
 body.locked [data-act="add-list-open"] { display: none; }
 body.locked .ptile .seg.count, body.locked .ptile .altrow, body.locked .pack-actions > :not(.top-done) { opacity: .35; }
 
@@ -405,3 +405,32 @@ ul.plain { padding-left: 18px; margin: 0; }
 .subtabs a:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
 .subtabs a:last-child { border-radius: 0 6px 6px 0; }
 .subtabs a.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+/* sortable collection columns */
+.th-sort { background: none; border: 0; padding: 0; min-height: 0; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.th-sort:hover { color: var(--text); }
+.th-sort.on { color: var(--text); font-weight: 600; }
+#results .list td .stepper.small .n { min-width: 22px; }
+
+/* proxy sheet: real card size on paper, nine to an A4 or Letter page */
+.proxy-sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 16px; }
+.proxy { position: relative; aspect-ratio: 63 / 88; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+.proxy img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+.proxy img.broken { display: none; }
+.proxy .ph { border: 1px solid var(--line); }
+@page { margin: 6mm; }
+@media print {
+  body { background: #fff; color: #000; }
+  .top, .toast, .modal, .proxy-tools { display: none !important; }
+  main { padding: 0 !important; }
+  .proxy-sheet { display: flex; flex-wrap: wrap; gap: 0; width: 189mm; margin: 0 auto; }
+  .proxy { width: 63mm; height: 88mm; aspect-ratio: auto; border-radius: 0; background: none; outline: .2mm solid #bbb; outline-offset: -.1mm; break-inside: avoid; }
+  .proxy .ph { color: #000; border: 0; font-size: 14pt; }
+}
+@media (max-width: 640px) {
+  /* Two steppers per row: smaller buttons, and In decks goes (Free still shows what's left). */
+  #results .list .stepper button { width: 32px; min-height: 32px; }
+  #results .list .stepper .n { min-width: 20px; }
+  #results .list th, #results .list td { padding-left: 4px; padding-right: 4px; }
+  #results .list th:nth-child(6), #results .list td:nth-child(6) { display: none; }
+}

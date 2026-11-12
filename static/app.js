@@ -306,6 +306,8 @@ const packOwned = p => p.cards.reduce((a, c) => a + (own(c.code).n ? 1 : 0), 0);
 // What the side list's dot, the filter and the header show: none owned, some, or a complete box.
 const packState = p => { const { have, need } = packCopies(p); return have >= need ? 'complete' : have ? 'some' : 'none'; };
 const PACK_STATES = { none: ['Not owned', 'todo', ''], some: ['Incomplete', 'partial', '◐ '], complete: ['Complete', 'done', '✓ '] };
+// Complete boxes of a product you own: every card at least k times its quantity in the box.
+const boxesOwned = p => p.cards.length ? Math.min(...p.cards.map(c => Math.floor(own(c.code).n / (c.quantity || 1)))) : 0;
 const packCopies = p => p.cards.reduce((a, c) => { const q = c.quantity || 1; a.need += q; a.have += Math.min(q, own(c.code).n); return a; }, { have: 0, need: 0 });
 
 // The printing shown on a title tile and adjusted by its +/− buttons: newest one you own, else newest.
@@ -321,6 +323,17 @@ function adjustTitle(key, d) {
   const p = mainPrinting(t);
   if (d < 0 && !own(p.code).n) return;
   setOwn(p.code, own(p.code).n + d);
+}
+
+// Alt art from the Collection list. + goes on the printing the tile shows (and, as everywhere, an alt-art copy
+// you didn't count yet counts as owned). − takes it from that printing, else from the newest one that has some.
+function adjustTitleAlt(key, d) {
+  const t = DB.titles.get(key);
+  let p = mainPrinting(t);
+  if (d < 0 && !own(p.code).custom) p = [...t.printings].reverse().find(x => own(x.code).custom);
+  if (!p) return;
+  const o = own(p.code);
+  setOwn(p.code, Math.max(o.n, o.custom + d), o.custom + d);
 }
 
 /* ---------- decks and availability ---------- */
@@ -470,7 +483,7 @@ async function parseDeckInput(text) {
 
 const UI = {
   view: '', arg: '',
-  filters: Object.assign({ q: '', side: '', faction: '', type: '', set: '', show: 'all', hideRotated: false, sort: 'name' }, store.get('filters', {})),
+  filters: Object.assign({ q: '', side: '', faction: '', type: '', set: '', show: 'all', hideRotated: false, sort: 'name', dir: 'asc' }, store.get('filters', {})),
   setsFilter: store.get('setsFilter', 'all'), // all, none, some, complete (older values show all)
   setsHideRotated: store.get('setsHideRotated', false),
   wfocus: 0,
@@ -499,7 +512,7 @@ function route() {
 }
 
 // Actions that change what you own. A locked collection refuses them; decks can still be built and edited.
-const LOCKED_ACTS = new Set(['title-n', 'print-n', 'set-n', 'alt', 'pack-fill', 'add-list-open', 'add-list', 'welcome', 'w-finish', 'restore']);
+const LOCKED_ACTS = new Set(['title-n', 'title-alt', 'print-n', 'set-n', 'alt', 'pack-add-box', 'pack-fill', 'add-list-open', 'add-list', 'welcome', 'w-finish', 'restore']);
 const lockNote = '<p class="lock-note">Collection is locked, so counts can\'t be changed. Use the lock at the top to unlock it.</p>';
 const LOCK_SVG = {
   true: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
@@ -516,11 +529,11 @@ function render() {
   $('#menu-publisher').innerHTML = publisherSeg();
   backupNote();
   // Pages opened from another one light up its tab: a deck and Find under Decks, Add by set under Collection.
-  const parent = { deck: 'decks', find: 'decks', sets: 'collection' }[UI.view] || UI.view;
+  const parent = { deck: 'decks', find: 'decks', proxies: 'decks', sets: 'collection' }[UI.view] || UI.view;
   for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === parent);
   const app = $('#app');
   FIND.scored = null; // the collection or decks may have changed
-  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats, find: viewFind };
+  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats, find: viewFind, proxies: viewProxies };
   (views[UI.view] || viewCollection)(app);
   renderModal();
 }
@@ -562,6 +575,8 @@ function viewWelcome(app) {
       <h2><span class="num">1</span> Products you own</h2>
       <p>For each product, set how many <b>complete</b> copies you have. If you only have part of one, tick <b>Some</b>
         and you'll go through it card by card in step 3.</p>
+      ${S.onboarded ? `<p class="install-hint">The counts start at the complete copies you already own. Raise one to add
+        another copy of that product. Lowering one here doesn't remove cards; use Add by set for that.</p>` : ''}
       <div class="w-cycles">
         ${cycles.map(([cy, packs]) => `
           <div class="w-cycle">
@@ -596,12 +611,14 @@ function viewWelcome(app) {
 
 function welcomeSummary() {
   const W = UI.welcome;
-  const complete = Object.entries(W.complete).filter(([, k]) => k > 0);
+  // Only what finishing adds: each card up to k boxes' worth, so boxes you already own add nothing.
+  const adds = ([code, k]) => DB.packByCode.get(code).cards.reduce((s, c) => s + Math.max(0, (c.quantity || 1) * k - own(c.code).n), 0);
+  const complete = Object.entries(W.complete).filter(e => e[1] > 0 && adds(e));
   const partial = Object.keys(W.partial).filter(k => W.partial[k]);
-  const cards = complete.reduce((a, [code, k]) => a + DB.packByCode.get(code).cards.reduce((s, c) => s + (c.quantity || 1) * k, 0), 0);
+  const cards = complete.reduce((a, e) => a + adds(e), 0);
   const lists = W.decks.trim() ? ' Cards from the pasted lists are added too.' : '';
-  if (!complete.length && !partial.length) return lists ? lists.trim() : 'Pick at least one product above, or skip.';
-  return `${plural(complete.length, 'complete product')} (${cards} cards) will be added.${lists}` +
+  if (!complete.length && !partial.length) return lists ? lists.trim() : S.onboarded ? 'Raise a product above to add another copy of it.' : 'Pick at least one product above, or skip.';
+  return `${complete.length ? `${plural(cards, 'card')} from ${plural(complete.length, 'product')} will be added.` : 'No new complete products.'}${lists}` +
     (partial.length ? ` After that you'll go through ${plural(partial.length, 'partial product')} one card grid at a time.` : '');
 }
 
@@ -685,10 +702,48 @@ function filteredTitles(locks) {
   // Set order follows how cards sit in a binder: product release order, then card number.
   // Booster packs number their own cards from 1, so they go after the set's main run.
   const setKey = t => { const p = sortPrinting(t); return [p.pack.cycle?.order ?? 9998, /booster/i.test(p.pack.name), p.pack.order, p.position]; };
-  if (f.sort === 'set') list.sort((a, b) => { const x = setKey(a), y = setKey(b); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3]; });
-  // Title matches before card-text matches.
-  else if (q) list.sort((a, b) => (b.nameKey.includes(q) - a.nameKey.includes(q)) || a.title.localeCompare(b.title));
+  const dir = f.dir === 'desc' ? -1 : 1;
+  const byName = (a, b) => a.title.localeCompare(b.title);
+  if (f.sort === 'set') {
+    const keys = new Map(list.map(t => [t, setKey(t)]));
+    list.sort((a, b) => { const x = keys.get(a), y = keys.get(b); return dir * (x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3]); });
+  } else if (SORT_VALUE[f.sort]) {
+    // Ties (and blank cells) keep A–Z order whichever way the column is sorted.
+    const vals = new Map(list.map(t => [t, SORT_VALUE[f.sort](t, locks)]));
+    const cmp = (x, y) => typeof x === 'string' ? x.localeCompare(y) : x - y;
+    list.sort((a, b) => dir * cmp(vals.get(a), vals.get(b)) || byName(a, b));
+  }
+  // By name: title matches before card-text matches.
+  else if (q && dir > 0) list.sort((a, b) => (b.nameKey.includes(q) - a.nameKey.includes(q)) || byName(a, b));
+  else if (dir < 0) list.reverse();
   return list;
+}
+
+// Collection list columns: [sort key, header]. Card sorts by name; its "set no." sorts as cards sit in a binder.
+const SORT_COLS = [['name', 'Card'], ['type', 'Type'], ['faction', 'Faction'], ['owned', 'Owned'], ['alt', 'Alt art'], ['used', 'In decks'], ['free', 'Free']];
+const SORT_NUMERIC = new Set(['owned', 'alt', 'used', 'free']);
+const SORT_VALUE = {
+  type: t => TYPE_NAMES[t.type] || t.type,
+  faction: t => fname(t.faction),
+  owned: t => titleOwned(t.key),
+  alt: t => titleCustom(t.key),
+  used: (t, locks) => lockedQty(locks, t.key),
+  free: (t, locks) => Math.max(0, titleOwned(t.key) - lockedQty(locks, t.key)),
+};
+
+function sortHeader(key, label) {
+  const f = UI.filters, on = f.sort === key || (!SORT_VALUE[f.sort] && f.sort !== 'set' && key === 'name');
+  const arrow = on ? (f.dir === 'desc' ? ' ↓' : ' ↑') : '';
+  return `<button class="th-sort ${on ? 'on' : ''}" data-act="sort" data-v="${key}" title="Sort by ${label.toLowerCase()}">${label}${arrow}</button>`;
+}
+
+function listHead() {
+  const f = UI.filters;
+  return `<thead><tr>${SORT_COLS.map(([k, l]) => {
+    const on = f.sort === k || (k === 'name' && f.sort === 'set');
+    const aria = on ? ` aria-sort="${f.dir === 'desc' ? 'descending' : 'ascending'}"` : '';
+    return `<th${aria}>${sortHeader(k, l)}${k === 'name' ? ` <span class="muted">·</span> ${sortHeader('set', 'Set no.')}` : ''}</th>`;
+  }).join('')}</tr></thead>`;
 }
 
 // The printing a title is filed under: the one in the filtered set, else the one shown on the tile.
@@ -742,9 +797,6 @@ function viewCollection(app) {
       ${[['all', 'All cards'], ['owned', 'Owned'], ['missing', 'Not owned'], ['incomplete', 'Fewer than a playset'], ['alt', 'Has alt art'], ['free', 'Free (not in decks)'], ['used', 'In built decks']]
         .map(([v, l]) => `<option value="${v}" ${f.show === v ? 'selected' : ''}>${l}</option>`).join('')}
     </select>
-    <select data-filter="sort" aria-label="Sort">
-      ${[['name', 'Sort by name'], ['set', 'Sort by set number']].map(([v, l]) => `<option value="${v}" ${f.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
-    </select>
     <label class="check"><input type="checkbox" data-filter="hideRotated" ${f.hideRotated ? 'checked' : ''}> Hide rotated</label>
   </div>
   ${lockNote}
@@ -766,7 +818,7 @@ function renderResults() {
   $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${list.length}</span>`;
   // A list, not card images: browsing the collection downloads no images (images show in a card's details).
   const box = $('#results');
-  box.innerHTML = '<table class="list"><thead><tr><th>Card</th><th>Type</th><th>Faction</th><th>Owned</th><th>Alt art</th><th>In decks</th><th>Free</th></tr></thead><tbody id="items"></tbody></table>';
+  box.innerHTML = `<table class="list">${listHead()}<tbody id="items"></tbody></table>`;
   if (!list.length) box.innerHTML = '<p class="empty">No cards match these filters.</p>';
   const items = $('#items');
   let shown = 0;
@@ -791,7 +843,7 @@ function titleRow(t, locks) {
     <td><span class="dot" style="--fc:${fcolor(t.faction)}"></span>${setLabel(t)}<a href="javascript:" data-act="card" data-key="${esc(t.key)}">${esc(t.title)}</a></td>
     <td>${TYPE_NAMES[t.type] || t.type}</td><td>${fname(t.faction)}</td>
     <td>${stepper('title-n', `data-key="${esc(t.key)}"`, n)}</td>
-    <td>${alt || ''}</td><td>${used || ''}</td><td>${n ? Math.max(0, n - used) : ''}</td>
+    <td>${stepper('title-alt', `data-key="${esc(t.key)}"`, alt, 'small')}</td><td>${used || ''}</td><td>${n ? Math.max(0, n - used) : ''}</td>
   </tr>`;
 }
 
@@ -823,6 +875,7 @@ function viewSets(app) {
         </div>
         <div class="pack-actions">
           <button data-act="pack-fill" data-k="1" title="Every card at least as many copies as came in the box">Own it complete</button>
+          <button data-act="pack-add-box" title="Add the cards of one more box on top of what you have">+1 box</button>
           <button data-act="pack-fill" data-k="0">Clear</button>
           <button class="primary top-done" data-act="pack-done">Next →</button>
         </div>
@@ -881,8 +934,11 @@ function setsSidebar(cur) {
 
 function printTile(c, i) {
   const o = own(c.code), tot = titleOwned(c.key);
-  const seg = [0, 1, 2, 3].map(k => `<button class="${o.n === k ? 'on' : ''}" data-act="set-n" data-code="${c.code}" data-n="${k}">${k}</button>`).join('')
-    + `<button class="${o.n > 3 ? 'on' : ''}" data-act="set-n" data-code="${c.code}" data-n="${o.n + 1}" title="More">${o.n > 3 ? o.n : '+'}</button>`;
+  // 0–3 pick a count; past 3 the count shows between − and +, so it can go down one at a time too.
+  const btn = (n, label, cls = '', title = '') => `<button class="${cls}" data-act="set-n" data-code="${c.code}" data-n="${n}"${title ? ` title="${title}"` : ''}>${label}</button>`;
+  const seg = [0, 1, 2, 3].map(k => btn(k, k, o.n === k ? 'on' : '')).join('')
+    + (o.n > 3 ? btn(o.n - 1, '−', '', 'One fewer') + btn(o.n, o.n, 'on') : '')
+    + btn(Math.max(4, o.n + 1), '+', '', 'One more');
   return `<div class="ptile ${o.n ? '' : 'unowned'} ${i === UI.wfocus ? 'focus' : ''}" data-code="${c.code}" data-key="${esc(c.key)}" data-i="${i}" style="--fc:${fcolor(c.faction_code)}">
     <button class="tile-img" data-act="focus" data-i="${i}">
       ${cardImg(c.code, c.title)}
@@ -1055,6 +1111,7 @@ function viewDeck(app) {
             : `<button class="primary" data-act="deck-build">${sum.status === 'ok' ? 'Build it (borrow cards)' : sum.print ? 'Build with printed cards…' : 'Take apart other decks and build…'}</button>`}
           ${!deck.built ? [...sum.decks.entries()].map(([d, n]) => `<button data-act="deck-unbuild" data-id="${d.id}">Deconstruct ${esc(d.name)} <span class="muted">(has ${n} you need)</span></button>`).join('') : ''}
           ${sum.print ? `<button data-act="show-print">Print list (${sum.print})</button>` : ''}
+          <button data-act="proxy-open">Proxy sheet</button>
           <button data-act="copy-deck">Deck list</button>
           <button class="danger" data-act="deck-delete">Delete</button>
         </div>
@@ -1071,6 +1128,42 @@ function viewDeck(app) {
       return `<h3>${TYPE_NAMES[type]} <span class="muted">${rs.reduce((a, r) => a + r.qty, 0)}</span></h3>
         <table class="list compact"><tbody>${rs.map(r => planRow(r, deck)).join('')}</tbody></table>`;
     }).join('')}
+  </div>`;
+}
+
+/* ---------- proxy sheet ---------- */
+
+// Card images at real size (63 × 88 mm), nine to a page, to print and cut out.
+// missing: cards you don't own · notfree: also those held by other built decks · all: the whole deck.
+const PROXY_MODES = [['missing', 'Not owned'], ['notfree', 'Not free'], ['all', 'Whole deck']];
+
+function proxyList(deck, mode) {
+  const { rows } = planDeck(deck);
+  return rows.map(r => ({ t: r.t, n: mode === 'all' ? r.qty : mode === 'notfree' ? r.print + r.borrowN : r.print }))
+    .filter(x => x.n > 0)
+    .sort((a, b) => TYPES.indexOf(a.t.type) - TYPES.indexOf(b.t.type) || a.t.title.localeCompare(b.t.title));
+}
+
+function viewProxies(app) {
+  const deck = S.decks.find(d => d.id === UI.arg);
+  if (!deck) { app.innerHTML = '<p class="empty">Deck not found. <a href="#decks">Back to decks</a></p>'; return; }
+  const mode = PROXY_MODES.some(([v]) => v === UI.proxyMode) ? UI.proxyMode : planDeck(deck).sum.print ? 'missing' : 'all';
+  const list = proxyList(deck, mode), total = list.reduce((a, x) => a + x.n, 0);
+  app.innerHTML = `
+  <div class="proxy-page">
+    <div class="proxy-tools">
+      <a href="#deck/${deck.id}" class="back">← ${esc(deck.name || 'Deck')}</a>
+      <h1>Proxy sheet</h1>
+      <p class="muted">Card images at real size, nine to a page. Print at 100% (no "fit to page"), then cut along the lines.</p>
+      <div class="row">
+        <span class="seg">${PROXY_MODES.map(([v, l]) => `<button class="${mode === v ? 'on' : ''}" data-act="proxy-mode" data-v="${v}">${l}</button>`).join('')}</span>
+        <button class="primary" data-act="proxy-print" ${total ? '' : 'disabled'}>Print ${plural(total, 'card')}</button>
+        ${mode === 'missing' && total ? '<button data-act="mark-printed">I printed them</button>' : ''}
+      </div>
+    </div>
+    ${total ? `<div class="proxy-sheet">${list.flatMap(x => Array(x.n).fill(
+      `<div class="proxy">${cardImg(x.t.newest.code, x.t.title, 'large')}</div>`)).join('')}</div>`
+      : `<p class="empty">${mode === 'all' ? 'This deck has no cards yet.' : 'Nothing to print: you have every card for this deck.'}</p>`}
   </div>`;
 }
 
@@ -1714,6 +1807,15 @@ const act = {
   'retry': () => location.reload(),
   'modal-show': el => { UI.modalCode = el.dataset.code; renderModal(); },
   'title-n': el => { adjustTitle(el.dataset.key, +el.dataset.d); refresh(el.dataset.key); },
+  'title-alt': el => { adjustTitleAlt(el.dataset.key, +el.dataset.d); refresh(el.dataset.key); },
+  'sort': el => {
+    const f = UI.filters, v = el.dataset.v;
+    // The same column again flips the order; a new one starts A–Z, or most first for counts.
+    if (f.sort === v) f.dir = f.dir === 'desc' ? 'asc' : 'desc';
+    else { f.sort = v; f.dir = SORT_NUMERIC.has(v) ? 'desc' : 'asc'; }
+    saveFilters();
+    renderResults();
+  },
   'print-n': el => { const c = el.dataset.code; setOwn(c, own(c).n + +el.dataset.d); refresh(DB.byCode.get(c).key); },
   'set-n': el => { const c = el.dataset.code; setOwn(c, +el.dataset.n); refresh(DB.byCode.get(c).key); },
   'alt': el => {
@@ -1766,6 +1868,15 @@ const act = {
     save();
     render();
   },
+  'pack-add-box': () => {
+    const pack = DB.packByCode.get(UI.setsPack);
+    let n = 0;
+    for (const c of pack.cards) { setOwn(c.code, own(c.code).n + (c.quantity || 1)); n += c.quantity || 1; }
+    S.packStatus[pack.code] = 'done';
+    save();
+    render();
+    toast(`Added another box of ${pack.name}: ${plural(n, 'card')}.`);
+  },
   // packStatus is only setup's walk-through now: 'partial' = still to go through, 'done' = gone through.
   // It's kept in the stored collection (and backups) as before, but no longer shown.
   packDone() { S.packStatus[UI.setsPack] = 'done'; save(); nextPack(); },
@@ -1803,7 +1914,12 @@ const act = {
     if (UI.view === 'sets' && !pubOk(DB.packByCode.get(UI.setsPack))) { location.hash = '#sets'; return; }
     render();
   },
-  'welcome': () => { $('.menu').open = false; location.hash = '#welcome'; },
+  'welcome': () => {
+    $('.menu').open = false;
+    // Setup again starts from the complete boxes you already own, so raising one adds copies of that product.
+    UI.welcome = { complete: Object.fromEntries(DB.packs.map(p => [p.code, boxesOwned(p)]).filter(([, k]) => k)), partial: {}, decks: '' };
+    location.hash = '#welcome';
+  },
 
   'check': async () => {
     const C = UI.check;
@@ -1871,9 +1987,12 @@ const act = {
     const { sum } = planDeck(currentDeck());
     showText('Cards to print', sum.printList.map(p => `${p.n}x ${p.t.title}`).join('\n'),
       `You don't own enough of ${plural(sum.printList.length, 'card')} (${sum.print} copies). Once they're printed, mark them so this deck counts them.`,
-      `<button data-act="mark-printed">I printed them</button>`);
+      `<button data-act="proxy-open">Proxy sheet</button><button data-act="mark-printed">I printed them</button>`);
   },
   'copy-deck': () => showText('Deck list', deckText(currentDeck())),
+  'proxy-open': () => { UI.proxyMode = null; location.hash = '#proxies/' + currentDeck().id; },
+  'proxy-mode': el => { UI.proxyMode = el.dataset.v; render(); },
+  'proxy-print': () => window.print(),
   'copy-text': () => copyText(),
 
   'refresh-db': async () => {
