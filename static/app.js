@@ -306,6 +306,8 @@ const packOwned = p => p.cards.reduce((a, c) => a + (own(c.code).n ? 1 : 0), 0);
 // What the side list's dot, the filter and the header show: none owned, some, or a complete box.
 const packState = p => { const { have, need } = packCopies(p); return have >= need ? 'complete' : have ? 'some' : 'none'; };
 const PACK_STATES = { none: ['Not owned', 'todo', ''], some: ['Incomplete', 'partial', '◐ '], complete: ['Complete', 'done', '✓ '] };
+// Complete boxes of a product you own: every card at least k times its quantity in the box.
+const boxesOwned = p => p.cards.length ? Math.min(...p.cards.map(c => Math.floor(own(c.code).n / (c.quantity || 1)))) : 0;
 const packCopies = p => p.cards.reduce((a, c) => { const q = c.quantity || 1; a.need += q; a.have += Math.min(q, own(c.code).n); return a; }, { have: 0, need: 0 });
 
 // The printing shown on a title tile and adjusted by its +/− buttons: newest one you own, else newest.
@@ -314,13 +316,6 @@ function mainPrinting(t) {
   const list = ps.length ? ps : t.printings;
   for (let i = list.length - 1; i >= 0; i--) if (own(list[i].code).n) return list[i];
   return list[list.length - 1];
-}
-
-function adjustTitle(key, d) {
-  const t = DB.titles.get(key);
-  const p = mainPrinting(t);
-  if (d < 0 && !own(p.code).n) return;
-  setOwn(p.code, own(p.code).n + d);
 }
 
 /* ---------- decks and availability ---------- */
@@ -423,7 +418,11 @@ function matchTitle(s) {
   return t;
 }
 
-const isHeader = line => /^[\w &-]+\s*\(\d+\)$/.test(line) || /influence|cards up to|deck built|total|^\d+ cards/i.test(line);
+// Section headings ("Event (16)") and the summary lines deck builders add at the end: influence, agenda points,
+// card totals, the sets used ("Cards up to Elevation", "Sets: …"), where it was built. Never cards, so never reported.
+// Anchored to how those lines start, so a misspelled card ("1x Totally Not A Card") is still reported.
+const isHeader = line => /^[\w &-]+\s*\(\d+\)$/.test(line) ||
+  /^(\d+ )?(influence|agenda points?|cards)\b|influence spent|^(cards up to|deck built|total)\b|^((included|legal) )?(sets?|packs?|cycles?|products?)( used)?\s*:|netrunnerdb\.com|jinteki\.net/i.test(line);
 
 function parseDeckText(text) {
   const cards = {}, unknown = [];
@@ -433,12 +432,16 @@ function parseDeckText(text) {
     if (!line) continue;
     // No card line is this long. Matching very long lines takes seconds (the patterns below backtrack).
     if (line.length > 300) { unknown.push(line.slice(0, 60) + '…'); continue; }
+    // Checked on the whole line: summary lines start with a number too ("15 influence spent", "45 cards (min 45)").
+    const header = isHeader(line);
     let qty = 1, m, counted = false;
     if ((m = line.match(/^(\d+)\s*[x×]?\s+(.+)$/i))) { qty = +m[1]; line = m[2]; counted = true; }
     else if ((m = line.match(/^(.+?)\s+[x×]\s*(\d+)$/i))) { qty = +m[2]; line = m[1]; counted = true; }
     const t = matchTitle(line);
     if (t) {
       cards[t.newest.code] = clampCount((cards[t.newest.code] || 0) + qty);
+    } else if (header) {
+      continue;
     } else if (!counted && !name && !Object.keys(cards).length && !isHeader(line)) {
       name = line;
     } else if (counted || !isHeader(line)) {
@@ -470,10 +473,10 @@ async function parseDeckInput(text) {
 
 const UI = {
   view: '', arg: '',
-  filters: Object.assign({ q: '', side: '', faction: '', type: '', set: '', show: 'all', hideRotated: false, sort: 'name' }, store.get('filters', {})),
+  filters: Object.assign({ q: '', side: '', faction: '', type: '', set: '', show: 'all', hideRotated: false, sort: 'name', dir: 'asc' }, store.get('filters', {})),
   setsFilter: store.get('setsFilter', 'all'), // all, none, some, complete (older values show all)
   setsHideRotated: store.get('setsHideRotated', false),
-  wfocus: 0,
+  lfocus: null, // the Collection row picked for typing counts
   welcome: { complete: {}, partial: {}, decks: '' },
   check: { text: '', result: null, error: '' },
   modal: null,
@@ -488,18 +491,15 @@ function route() {
   UI.view = view || (S.onboarded ? 'collection' : 'welcome');
   // A link with a broken %-escape (e.g. #deck/%E0) would otherwise stop the app; its argument just isn't found.
   try { UI.arg = decodeURIComponent(rest.join('/')); } catch { UI.arg = ''; }
-  if (UI.view !== 'collection') UI.only = null;
-  if (UI.view === 'sets' && !UI.arg) {
-    const packs = visiblePacks();
-    const next = packs.find(p => S.packStatus[p.code] === 'partial') || packs.find(p => packState(p) !== 'complete') || packs[0];
-    location.replace('#sets/' + next.code);
-    return;
-  }
+  // Leaving the Collection list drops its "showing only" list and the row picked for typing counts.
+  if (UI.view !== 'collection') { UI.only = null; UI.lfocus = null; }
+  // Setup is for the first run only; afterwards products are added on Add by set.
+  if (UI.view === 'welcome' && S.onboarded) { location.replace('#sets'); return; }
   render();
 }
 
 // Actions that change what you own. A locked collection refuses them; decks can still be built and edited.
-const LOCKED_ACTS = new Set(['title-n', 'print-n', 'set-n', 'alt', 'pack-fill', 'add-list-open', 'add-list', 'welcome', 'w-finish', 'restore']);
+const LOCKED_ACTS = new Set(['print-n', 'alt', 'pack-box', 'pack-clear', 'add-list-open', 'add-list', 'w-finish', 'restore']);
 const lockNote = '<p class="lock-note">Collection is locked, so counts can\'t be changed. Use the lock at the top to unlock it.</p>';
 const LOCK_SVG = {
   true: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
@@ -516,11 +516,11 @@ function render() {
   $('#menu-publisher').innerHTML = publisherSeg();
   backupNote();
   // Pages opened from another one light up its tab: a deck and Find under Decks, Add by set under Collection.
-  const parent = { deck: 'decks', find: 'decks', sets: 'collection' }[UI.view] || UI.view;
+  const parent = { deck: 'decks', find: 'decks', proxies: 'decks', sets: 'collection' }[UI.view] || UI.view;
   for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === parent);
   const app = $('#app');
   FIND.scored = null; // the collection or decks may have changed
-  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats, find: viewFind };
+  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats, find: viewFind, proxies: viewProxies };
   (views[UI.view] || viewCollection)(app);
   renderModal();
 }
@@ -561,7 +561,7 @@ function viewWelcome(app) {
     <section class="step">
       <h2><span class="num">1</span> Products you own</h2>
       <p>For each product, set how many <b>complete</b> copies you have. If you only have part of one, tick <b>Some</b>
-        and you'll go through it card by card in step 3.</p>
+        and you'll set its cards one by one after setup.</p>
       <div class="w-cycles">
         ${cycles.map(([cy, packs]) => `
           <div class="w-cycle">
@@ -596,13 +596,15 @@ function viewWelcome(app) {
 
 function welcomeSummary() {
   const W = UI.welcome;
-  const complete = Object.entries(W.complete).filter(([, k]) => k > 0);
+  // Only what finishing adds: each card up to k boxes' worth, so boxes you already own add nothing.
+  const adds = ([code, k]) => DB.packByCode.get(code).cards.reduce((s, c) => s + Math.max(0, (c.quantity || 1) * k - own(c.code).n), 0);
+  const complete = Object.entries(W.complete).filter(e => e[1] > 0 && adds(e));
   const partial = Object.keys(W.partial).filter(k => W.partial[k]);
-  const cards = complete.reduce((a, [code, k]) => a + DB.packByCode.get(code).cards.reduce((s, c) => s + (c.quantity || 1) * k, 0), 0);
+  const cards = complete.reduce((a, e) => a + adds(e), 0);
   const lists = W.decks.trim() ? ' Cards from the pasted lists are added too.' : '';
   if (!complete.length && !partial.length) return lists ? lists.trim() : 'Pick at least one product above, or skip.';
-  return `${plural(complete.length, 'complete product')} (${cards} cards) will be added.${lists}` +
-    (partial.length ? ` After that you'll go through ${plural(partial.length, 'partial product')} one card grid at a time.` : '');
+  return (`${complete.length ? `${plural(cards, 'card')} from ${plural(complete.length, 'complete product')} will be added.` : ''}${lists}` +
+    (partial.length ? ` ${complete.length || lists ? 'After that, the' : 'The'} cards of ${plural(partial.length, 'partial product')} open in the Collection list to set one by one.` : '')).trim();
 }
 
 async function finishWelcome() {
@@ -610,7 +612,7 @@ async function finishWelcome() {
   W.decks = $('#w-decks').value;
   for (const [code, k] of Object.entries(W.complete)) {
     if (!k) continue;
-    // At least k boxes' worth of each card; copies beyond that are kept (setup can be run again).
+    // At least k boxes' worth of each card; copies already added (say from a restored backup) are kept.
     for (const c of DB.packByCode.get(code).cards) setOwn(c.code, Math.max(own(c.code).n, (c.quantity || 1) * k));
     S.packStatus[code] = 'done';
   }
@@ -627,8 +629,11 @@ async function finishWelcome() {
   save();
   if (added) toast(`Added ${added} cards from deck lists.`);
   if (failed.length) alert('Some deck links could not be read:\n' + failed.join('\n'));
-  const first = visiblePacks().find(p => S.packStatus[p.code] === 'partial');
-  location.hash = first ? '#sets/' + first.code : '#collection';
+  // Products ticked as partial: their cards in the Collection list, to set card by card.
+  const partial = visiblePacks().filter(p => W.partial[p.code] && S.packStatus[p.code] === 'partial');
+  if (partial.length) collectionCards(partial.length === 1 ? `${partial[0].name}: set the cards you have`
+    : `${plural(partial.length, 'partial product')} from setup: set the cards you have`, partial.flatMap(p => p.cards.map(c => c.code)));
+  else location.hash = '#collection';
 }
 
 // Deck links each count as one input; pasted text is split on blank lines between lists.
@@ -660,46 +665,85 @@ function groupByCycle(packs) {
 
 /* ---------- collection ---------- */
 
-function filteredTitles(locks) {
+// The list has a row per printing: copies are kept per printing (that's where a card is filed). In decks and
+// Free stay per card name, since decks count cards by name and don't record which printing went in.
+// A card's printings shown in the list: the publisher setting hides the other publisher's, unless you own some.
+const listPrintings = t => t.printings.filter(p => pubOk(p.pack) || own(p.code).n);
+
+function filteredRows(locks) {
   const f = UI.filters, q = norm(f.q);
-  const list = DB.titleList.filter(t => {
-    if (!titleVisible(t)) return false;
-    if (f.side && t.side !== f.side) return false;
-    if (f.faction && t.faction !== f.faction) return false;
-    if (f.type && t.type !== f.type) return false;
-    if (f.set && !t.printings.some(p => p.pack.cycle_code === f.set)) return false;
-    if (f.hideRotated && t.rotated) return false;
-    if (UI.only && !UI.only.keys.has(t.key)) return false;
-    if (q && !t.search.includes(q)) return false;
-    const n = titleOwned(t.key);
-    switch (f.show) {
-      case 'owned': return n > 0;
-      case 'missing': return n === 0;
-      case 'incomplete': return n > 0 && n < t.deckLimit;
-      case 'alt': return titleCustom(t.key) > 0;
-      case 'free': return n - lockedQty(locks, t.key) > 0;
-      case 'used': return lockedQty(locks, t.key) > 0;
+  const rows = [];
+  for (const t of DB.titleList) {
+    if (!titleVisible(t)) continue;
+    if (f.side && t.side !== f.side) continue;
+    if (f.faction && t.faction !== f.faction) continue;
+    if (f.type && t.type !== f.type) continue;
+    if (f.hideRotated && t.rotated) continue;
+    if (UI.only?.keys && !UI.only.keys.has(t.key)) continue;
+    if (q && !t.search.includes(q)) continue;
+    // Filters about the card as a whole (playsets, decks) keep or drop all its printings.
+    const n = titleOwned(t.key), used = lockedQty(locks, t.key);
+    if (f.show === 'incomplete' && !(n > 0 && n < t.deckLimit)) continue;
+    if (f.show === 'free' && !(n - used > 0)) continue;
+    if (f.show === 'used' && !used) continue;
+    for (const p of listPrintings(t)) {
+      if (f.set && p.pack.cycle_code !== f.set) continue;
+      if (UI.only?.codes && !UI.only.codes.has(p.code)) continue;
+      const o = own(p.code);
+      if (f.show === 'owned' && !o.n) continue;
+      if (f.show === 'missing' && o.n) continue;
+      if (f.show === 'alt' && !o.custom) continue;
+      rows.push({ t, p });
     }
-    return true;
-  });
+  }
   // Set order follows how cards sit in a binder: product release order, then card number.
   // Booster packs number their own cards from 1, so they go after the set's main run.
-  const setKey = t => { const p = sortPrinting(t); return [p.pack.cycle?.order ?? 9998, /booster/i.test(p.pack.name), p.pack.order, p.position]; };
-  if (f.sort === 'set') list.sort((a, b) => { const x = setKey(a), y = setKey(b); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3]; });
-  // Title matches before card-text matches.
-  else if (q) list.sort((a, b) => (b.nameKey.includes(q) - a.nameKey.includes(q)) || a.title.localeCompare(b.title));
-  return list;
+  const setKey = p => [p.pack.cycle?.order ?? 9998, /booster/i.test(p.pack.name), p.pack.order, p.position];
+  const ls = listSort(), dir = ls.dir === 'desc' ? -1 : 1;
+  // Within a card, newest printing first.
+  const byName = (a, b) => a.t.title.localeCompare(b.t.title) || b.p.pack.order - a.p.pack.order;
+  if (ls.sort === 'set') {
+    const keys = new Map(rows.map(r => [r, setKey(r.p)]));
+    rows.sort((a, b) => { const x = keys.get(a), y = keys.get(b); return dir * (x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3]); });
+  } else if (SORT_VALUE[ls.sort]) {
+    // Ties (and blank cells) keep A–Z order whichever way the column is sorted.
+    const vals = new Map(rows.map(r => [r, SORT_VALUE[ls.sort](r, locks)]));
+    const cmp = (x, y) => typeof x === 'string' ? x.localeCompare(y) : x - y;
+    rows.sort((a, b) => dir * cmp(vals.get(a), vals.get(b)) || byName(a, b));
+  } else {
+    // By name (printings of a card stay together); with a search, title matches before card-text matches.
+    const hit = r => q ? +r.t.nameKey.includes(q) : 0;
+    rows.sort((a, b) => (dir > 0 ? hit(b) - hit(a) : 0) || dir * a.t.title.localeCompare(b.t.title) || b.p.pack.order - a.p.pack.order);
+  }
+  return rows;
 }
 
-// The printing a title is filed under: the one in the filtered set, else the one shown on the tile.
-function sortPrinting(t) {
-  return (UI.filters.set && t.printings.find(p => p.pack.cycle_code === UI.filters.set)) || mainPrinting(t);
-}
+// The list's order: a product's cards (UI.only.sort) in their own order, else your saved sort.
+const listSort = () => UI.only?.sort ? { sort: UI.only.sort, dir: 'asc' } : UI.filters;
+// Sorted by name, a card's printings sit together and share one In decks / Free cell.
+const groupedSort = () => !SORT_VALUE[listSort().sort] && listSort().sort !== 'set';
 
-function setLabel(t) {
-  if (UI.filters.sort !== 'set') return '';
-  const p = sortPrinting(t);
-  return `<span class="setno muted" title="${esc(p.pack.name)} #${p.position}">${UI.filters.set ? '' : setIcon(p.pack.cycle_code)}${p.position}.</span> `;
+// Collection list columns: [sort key, header].
+const SORT_COLS = [['set', 'Set'], ['name', 'Card'], ['type', 'Type'], ['faction', 'Faction'], ['owned', 'Owned'], ['alt', 'Alt art'], ['used', 'In decks'], ['free', 'Free']];
+const SORT_NUMERIC = new Set(['owned', 'alt', 'used', 'free']);
+const SORT_VALUE = {
+  type: r => TYPE_NAMES[r.t.type] || r.t.type,
+  faction: r => fname(r.t.faction),
+  owned: r => own(r.p.code).n,
+  alt: r => own(r.p.code).custom,
+  used: (r, locks) => lockedQty(locks, r.t.key),
+  free: (r, locks) => Math.max(0, titleOwned(r.t.key) - lockedQty(locks, r.t.key)),
+};
+
+function listHead() {
+  const f = listSort();
+  return `<thead><tr>${SORT_COLS.map(([k, l]) => {
+    const on = f.sort === k || (k === 'name' && groupedSort());
+    const aria = on ? ` aria-sort="${f.dir === 'desc' ? 'descending' : 'ascending'}"` : '';
+    const arrow = on ? (f.dir === 'desc' ? ' ↓' : ' ↑') : '';
+    const tip = k === 'set' ? 'Sort by set, in card number order' : `Sort by ${l.toLowerCase()}`;
+    return `<th${aria}><button class="th-sort ${on ? 'on' : ''}" data-act="sort" data-v="${k}" title="${tip}">${l}${arrow}</button></th>`;
+  }).join('')}</tr></thead>`;
 }
 
 // One entry per set symbol: a cycle, with all its products (Downfall + Uprising are both Ashes, numbered 1–130).
@@ -742,17 +786,16 @@ function viewCollection(app) {
       ${[['all', 'All cards'], ['owned', 'Owned'], ['missing', 'Not owned'], ['incomplete', 'Fewer than a playset'], ['alt', 'Has alt art'], ['free', 'Free (not in decks)'], ['used', 'In built decks']]
         .map(([v, l]) => `<option value="${v}" ${f.show === v ? 'selected' : ''}>${l}</option>`).join('')}
     </select>
-    <select data-filter="sort" aria-label="Sort">
-      ${[['name', 'Sort by name'], ['set', 'Sort by set number']].map(([v, l]) => `<option value="${v}" ${f.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
-    </select>
     <label class="check"><input type="checkbox" data-filter="hideRotated" ${f.hideRotated ? 'checked' : ''}> Hide rotated</label>
   </div>
   ${lockNote}
   ${UI.only ? `<p class="only-note">Showing only: ${esc(UI.only.label)} <button data-act="only-clear">Show all cards</button></p>` : ''}
   <div class="stats-row"><div class="stats" id="stats"></div>
     <span class="add-cards"><span class="muted">Add cards:</span>
-      <button data-act="sets-open" title="${f.set ? `Go through ${esc(DB.cycles.get(f.set)?.name || 'this set')} card by card` : 'Go through a product card by card'}">By set</button>
+      <button data-act="sets-open" title="Add or remove whole boxes of a product">By set</button>
       <button data-act="add-list-open" title="Paste a list or NetrunnerDB deck links">From a list</button></span></div>
+  ${UI.only?.codes || f.set ? `<p class="hint">Click a row, then type: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>0</kbd>–<kbd>9</kbd> count ·
+    <kbd>+</kbd>/<kbd>−</kbd> adjust · <kbd>A</kbd>/<kbd>Shift+A</kbd> alt art</p>` : ''}
   <div id="results"></div>`;
   renderResults();
 }
@@ -761,20 +804,30 @@ let resultsObserver = null;
 
 function renderResults() {
   const locks = computeLocks();
-  const list = filteredTitles(locks);
-  UI.resultsCount = list.length;
-  $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${list.length}</span>`;
+  const rows = UI.listRows = filteredRows(locks);
+  UI.resultsCount = rows.length;
+  $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${rows.length}</span>`;
   // A list, not card images: browsing the collection downloads no images (images show in a card's details).
   const box = $('#results');
-  box.innerHTML = '<table class="list"><thead><tr><th>Card</th><th>Type</th><th>Faction</th><th>Owned</th><th>Alt art</th><th>In decks</th><th>Free</th></tr></thead><tbody id="items"></tbody></table>';
-  if (!list.length) box.innerHTML = '<p class="empty">No cards match these filters.</p>';
+  box.innerHTML = `<table class="list">${listHead()}<tbody id="items"></tbody></table>`;
+  if (!rows.length) box.innerHTML = '<p class="empty">No cards match these filters.</p>';
   const items = $('#items');
+  // span: rows of the same card in a row, when grouped (the first of them carries the shared cells).
+  const grouped = groupedSort();
+  rows.forEach((r, i) => {
+    if (!grouped) r.span = null;
+    else if (rows[i - 1]?.t !== r.t) { let k = i; while (rows[k + 1]?.t === r.t) k++; r.span = k - i + 1; }
+    else r.span = 0;
+  });
   let shown = 0;
   const more = () => {
-    const chunk = list.slice(shown, shown + 150);
-    shown += chunk.length;
-    items.insertAdjacentHTML('beforeend', chunk.map(t => titleRow(t, locks)).join(''));
-    if (shown >= list.length) resultsObserver?.disconnect();
+    // A chunk ends between cards, so a shared cell never spans rows that aren't shown yet.
+    let end = Math.min(rows.length, shown + 150);
+    while (end < rows.length && rows[end].span === 0) end++;
+    const chunk = rows.slice(shown, end);
+    shown = end;
+    items.insertAdjacentHTML('beforeend', chunk.map(r => printingRow(r.t, r.p, locks, r.span)).join(''));
+    if (shown >= rows.length) resultsObserver?.disconnect();
   };
   resultsObserver?.disconnect();
   if (!items) return;
@@ -785,161 +838,123 @@ function renderResults() {
   resultsObserver.observe(sentinel);
 }
 
-function titleRow(t, locks) {
-  const n = titleOwned(t.key), alt = titleCustom(t.key), used = lockedQty(locks, t.key);
-  return `<tr data-key="${esc(t.key)}" class="${n ? '' : 'unowned'}">
-    <td><span class="dot" style="--fc:${fcolor(t.faction)}"></span>${setLabel(t)}<a href="javascript:" data-act="card" data-key="${esc(t.key)}">${esc(t.title)}</a></td>
+// span: null = not grouped (the card's totals show muted on every row), 0 = a later row of a group (no cells),
+// n = first row of a group of n (the cells span them).
+function printingRow(t, p, locks, span) {
+  const o = own(p.code), n = titleOwned(t.key), used = lockedQty(locks, t.key), free = n ? Math.max(0, n - used) : '';
+  const ps = listPrintings(t);
+  const others = ps.filter(x => x !== p).map(x => `${x.pack.name} #${x.position}`).join(', ');
+  const count = ps.length > 1 ? ` <span class="nprint" title="Also in ${esc(others)}">${ps.length} printings</span>` : '';
+  const all = `All ${plural(n, 'copy', 'copies')} of ${esc(t.title)}, every printing`;
+  const totals = span === 0 ? ''
+    : span > 1 ? `<td class="tot" rowspan="${span}">${used || ''}</td><td class="tot" rowspan="${span}">${free}</td>`
+    : span ? `<td>${used || ''}</td><td>${free}</td>`
+    : `<td class="muted" title="${all}">${used ? `${used} <small>of ${n}</small>` : ''}</td><td class="muted" title="${all}">${free}</td>`;
+  return `<tr data-key="${esc(t.key)}" data-code="${p.code}" data-span="${span ?? ''}" class="${o.n ? '' : 'unowned'} ${UI.lfocus === p.code ? 'focus' : ''}">
+    <td class="setno" title="${esc(p.pack.name)} #${p.position}">${setIcon(p.pack.cycle_code)}${p.position}</td>
+    <td class="card"><span class="dot" style="--fc:${fcolor(t.faction)}"></span><a href="javascript:" data-act="card" data-key="${esc(t.key)}" data-code="${p.code}">${esc(t.title)}</a><span class="psub"><span class="setno-sm">${setIcon(p.pack.cycle_code)}${p.position}</span>${count}</span></td>
     <td>${TYPE_NAMES[t.type] || t.type}</td><td>${fname(t.faction)}</td>
-    <td>${stepper('title-n', `data-key="${esc(t.key)}"`, n)}</td>
-    <td>${alt || ''}</td><td>${used || ''}</td><td>${n ? Math.max(0, n - used) : ''}</td>
+    <td>${stepper('print-n', `data-code="${p.code}"`, o.n)}</td>
+    <td>${stepper('alt', `data-code="${p.code}"`, o.custom, 'small')}</td>${totals}
   </tr>`;
 }
 
-/* ---------- add by set (wizard) ---------- */
+/* ---------- add by set: whole products ---------- */
+
+// This page only adds or removes whole boxes (a box's worth of every card), or clears a product.
+// Single cards are changed in the Collection list: a product's name and its "missing" link open it there.
+const qty = c => c.quantity || 1;
+
+// Copies toward the next box after the complete ones (have is 0 when there are only complete boxes).
+function nextBox(p, boxes = boxesOwned(p)) {
+  return p.cards.reduce((a, c) => { a.need += qty(c); a.have += Math.min(qty(c), Math.max(0, own(c.code).n - boxes * qty(c))); return a; }, { have: 0, need: 0 });
+}
 
 function viewSets(app) {
-  const pack = DB.packByCode.get(UI.arg) || visiblePacks()[0];
-  if (UI.setsPack !== pack.code) { UI.setsPack = pack.code; UI.wfocus = 0; }
-  // "N missing": only the cards short of a complete box, picked when it's turned on. A card you then fix stays
-  // in view, so the grid doesn't jump while you edit.
-  if (UI.setsShort?.pack !== pack.code) UI.setsShort = null;
-  else UI.setsShort.codes ||= new Set(pack.cards.filter(c => own(c.code).n < (c.quantity || 1)).map(c => c.code));
-  const cards = UI.setsShort ? pack.cards.filter(c => UI.setsShort.codes.has(c.code)) : pack.cards;
-  const state = packState(pack);
-  app.innerHTML = `
-  <div class="sets">
-    <aside class="sets-side" id="sets-side">${setsSidebar(pack)}</aside>
-    <section class="sets-main">
-      <a href="#collection" class="back">← Collection</a>
-      <div class="pack-head">
-        <select class="pack-jump" id="pack-jump" aria-label="Product">${groupByCycle(visiblePacks()).map(([cy, ps]) =>
-          `<optgroup label="${esc(cy?.name || 'Other')}">${ps.map(p => `<option value="${p.code}" ${p === pack ? 'selected' : ''}>${packOption(p)}</option>`).join('')}</optgroup>`).join('')}
-        </select>
-        <div>
-          <h1>${setIcon(pack.cycle_code)}${esc(pack.name)}</h1>
-          <div class="muted"><span class="hide-sm">${esc(pack.cycle?.name || '')} · released ${esc(pack.date_release || '?')} ·</span> ${plural(pack.cards.length, 'card')}
-            · <span id="pack-progress">${packCopiesText(pack)}</span>
-            · <span id="pack-state">${statePill(state)}</span></div>
-        </div>
-        <div class="pack-actions">
-          <button data-act="pack-fill" data-k="1" title="Every card at least as many copies as came in the box">Own it complete</button>
-          <button data-act="pack-fill" data-k="0">Clear</button>
-          <button class="primary top-done" data-act="pack-done">Next →</button>
-        </div>
-      </div>
-      ${lockNote}
-      <p class="hint">Click a card or use the keyboard: <kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> move ·
-        <kbd>0</kbd>–<kbd>9</kbd> set count · <kbd>+</kbd>/<kbd>−</kbd> adjust · <kbd>A</kbd>/<kbd>Shift+A</kbd> alt art ·
-        <kbd>Enter</kbd> next product</p>
-      ${UI.setsShort ? `<p class="only-note">Showing only ${plural(cards.length, 'card')} short of a complete box
-        <button data-act="sets-short" data-v="">Show all cards</button></p>` : ''}
-      <div class="pgrid" id="pgrid">${cards.map((c, i) => printTile(c, i)).join('')}</div>
-      <div class="pack-bar">
-        <span id="pack-bar-progress">${packProgress(pack)}</span>
-        <button class="primary" data-act="pack-done">Next →</button>
-      </div>
-    </section>
-  </div>`;
-  const side = $('#sets-side'), cur = $('.prow.cur', side);
-  if (cur) side.scrollTop = cur.offsetTop - side.clientHeight / 2;
-  window.scrollTo(0, 0);
-}
-
-const packProgress = p => `<b>${packOwned(p)}</b> of ${p.cards.length} cards owned`;
-// "230 / 231 copies · 1 missing", the missing part showing only the cards short of the box.
-function packCopiesText(p) {
-  const { have, need } = packCopies(p), miss = need - have;
-  return `${have} / ${need} copies${have && miss ? ` · <a href="javascript:" data-act="sets-short" data-v="${p.code}">${miss} missing</a>` : ''}`;
-}
-
-// In the side list: copies an incomplete product is short of a complete box.
-function sideMissing(p) {
-  const { have, need } = packCopies(p);
-  return have && have < need ? ` <span class="pmiss" title="${need - have} copies short of a complete box">−${need - have}</span>` : '';
-}
-
-const statePill = state => `<span class="pill ${PACK_STATES[state][1]}">${PACK_STATES[state][0]}</span>`;
-const packOption = p => `${PACK_STATES[packState(p)][2]}${esc(p.name)} (${packOwned(p)}/${p.cards.length})`;
-
-function setsSidebar(cur) {
   const f = UI.setsFilter;
-  const packs = DB.packs.filter(p => {
-    if (!pubOk(p) && p !== cur) return false;
-    if (UI.setsHideRotated && p.cycle?.rotated && p !== cur) return false;
-    return !PACK_STATES[f] || p === cur || packState(p) === f;
-  });
-  return `
-    <div class="seg small">${[['all', 'All'], ['none', 'Not owned'], ['some', 'Incomplete'], ['complete', 'Complete']]
-      .map(([v, l]) => `<button class="${f === v ? 'on' : ''}" data-act="sets-filter" data-v="${v}">${l}</button>`).join('')}</div>
-    <label class="check"><input type="checkbox" data-act="sets-rotated" ${UI.setsHideRotated ? 'checked' : ''}> Hide rotated</label>
-    ${groupByCycle(packs).map(([cy, ps]) => `
-      <div class="cyc"><div class="cyc-h">${setIcon(cy?.code)}${esc(cy?.name || 'Other')} <span class="pub">${PUBLISHERS[ps[0].publisher]}</span></div>
-      ${ps.map(p => `<a class="prow ${p === cur ? 'cur' : ''} ${PACK_STATES[packState(p)][1]}" href="#sets/${p.code}">
-        <span class="sdot"></span><span class="pname">${esc(p.name)}</span><span class="pcount">${packOwned(p)}/${p.cards.length}${sideMissing(p)}</span></a>`).join('')}
-      </div>`).join('')}`;
+  const packs = visiblePacks().filter(p => !(UI.setsHideRotated && p.cycle?.rotated) && (!PACK_STATES[f] || packState(p) === f));
+  app.innerHTML = `
+  <div class="products">
+    <a href="#collection" class="back">← Collection</a>
+    <h1>Add by set</h1>
+    <p class="muted">Add or remove whole boxes of a product. To change single cards, tap a product's name: its cards open in the
+      Collection list.</p>
+    ${lockNote}
+    <div class="toolbar">
+      <span class="seg small">${[['all', 'All'], ['none', 'Not owned'], ['some', 'Incomplete'], ['complete', 'Complete']]
+        .map(([v, l]) => `<button class="${f === v ? 'on' : ''}" data-act="sets-filter" data-v="${v}">${l}</button>`).join('')}</span>
+      <label class="check"><input type="checkbox" data-act="sets-rotated" ${UI.setsHideRotated ? 'checked' : ''}> Hide rotated</label>
+    </div>
+    ${groupByCycle(packs).map(([cy, ps]) => `<section class="prod-cyc">
+      <h3>${setIcon(cy?.code)}${esc(cy?.name || 'Other')} <span class="pub">${PUBLISHERS[ps[0].publisher]}</span></h3>
+      ${ps.map(productRow).join('')}</section>`).join('') || '<p class="empty">No products match.</p>'}
+  </div>`;
+  // #sets/<product>: that product, highlighted.
+  const row = UI.arg && $(`.prod-row[data-pack="${CSS.escape(UI.arg)}"]`);
+  if (row) { row.classList.add('cur'); row.scrollIntoView({ block: 'center' }); } else window.scrollTo(0, 0);
 }
 
-function printTile(c, i) {
-  const o = own(c.code), tot = titleOwned(c.key);
-  const seg = [0, 1, 2, 3].map(k => `<button class="${o.n === k ? 'on' : ''}" data-act="set-n" data-code="${c.code}" data-n="${k}">${k}</button>`).join('')
-    + `<button class="${o.n > 3 ? 'on' : ''}" data-act="set-n" data-code="${c.code}" data-n="${o.n + 1}" title="More">${o.n > 3 ? o.n : '+'}</button>`;
-  return `<div class="ptile ${o.n ? '' : 'unowned'} ${i === UI.wfocus ? 'focus' : ''}" data-code="${c.code}" data-key="${esc(c.key)}" data-i="${i}" style="--fc:${fcolor(c.faction_code)}">
-    <button class="tile-img" data-act="focus" data-i="${i}">
-      ${cardImg(c.code, c.title)}
-      ${o.custom ? `<span class="badge alt">${o.custom} alt art</span>` : ''}
-    </button>
-    <div class="tile-name"><span class="muted">${c.position}.</span> ${esc(c.title)}</div>
-    <div class="pt-sub">${c.quantity || 1} in box${tot > o.n ? ` · ${tot} owned in total` : ''}
-      · <a href="javascript:" data-act="card" data-key="${esc(c.key)}">details</a></div>
-    <div class="seg count">${seg}</div>
-    <div class="altrow">Alt art ${stepper('alt', `data-code="${c.code}"`, o.custom, 'small')}</div>
+function productRow(p) {
+  const boxes = boxesOwned(p), { have, need } = nextBox(p, boxes);
+  const state = [boxes && plural(boxes, 'box', 'boxes'), have && `${have}/${need} of ${boxes ? 'another' : 'a box'}`].filter(Boolean).join(' + ') || 'Not owned';
+  const missing = have ? ` · <a href="javascript:" data-act="pack-missing" data-v="${p.code}">${need - have} missing</a>` : '';
+  return `<div class="prod-row ${PACK_STATES[packState(p)][1]}" data-pack="${p.code}">
+    <span class="sdot"></span>
+    <span class="prod-name"><a href="javascript:" data-act="pack-cards" data-v="${p.code}" title="Show its cards in the Collection list">${esc(p.name)}</a>
+      <small>${plural(p.cards.length, 'card')} · ${esc((p.date_release || '').slice(0, 4))}</small></span>
+    <span class="prod-state">${state}${missing}</span>
+    <span class="stepper"><button data-act="pack-box" data-v="${p.code}" data-d="-1" aria-label="Remove a box" title="Remove one box's worth of every card">−</button><span class="n">${boxes}</span><button data-act="pack-box" data-v="${p.code}" data-d="1" aria-label="Add a box" title="Add one box's worth of every card">+</button></span>
+    <button class="prod-clear ${boxes || have ? '' : 'idle'}" data-act="pack-clear" data-v="${p.code}" title="Set every card of this product to 0">Clear</button>
   </div>`;
 }
 
-function setFocus(i, scroll = true) {
-  const tiles = $$('.ptile');
-  if (!tiles.length) return;
-  UI.wfocus = Math.max(0, Math.min(tiles.length - 1, i));
-  tiles.forEach((t, j) => t.classList.toggle('focus', j === UI.wfocus));
-  if (scroll) tiles[UI.wfocus].scrollIntoView({ block: 'nearest' });
+// What lowering counts to `next` (code → copies) does beyond the counts: built decks left short, alt art dropped.
+function removalWarnings(next) {
+  const locks = computeLocks(), drop = new Map(), decks = new Set();
+  let alt = 0;
+  for (const [code, n] of next) {
+    const c = DB.byCode.get(code), o = own(code);
+    if (o.n > n) drop.set(c.key, (drop.get(c.key) || 0) + o.n - n);
+    if (o.custom > n) alt += o.custom - n;
+  }
+  for (const [key, d] of drop) if (titleOwned(key) - d < lockedQty(locks, key)) for (const l of locks.get(key)) decks.add(l.deck.name || 'Untitled deck');
+  return [decks.size && `Built decks will be short of cards: ${[...decks].join(', ')}.`, alt && `${plural(alt, 'alt-art copy', 'alt-art copies')} will be removed too.`].filter(Boolean);
 }
 
-function nextPack() {
-  const packs = visiblePacks();
-  const i = packs.findIndex(p => p.code === UI.setsPack);
-  const order = [...packs.slice(i + 1), ...packs.slice(0, i)];
-  // Products ticked as "Some" in setup and not gone through yet first, then the next one that isn't a complete box.
-  const todo = order.filter(p => !(UI.setsHideRotated && p.cycle?.rotated));
-  const next = todo.find(p => S.packStatus[p.code] === 'partial') || todo.find(p => packState(p) !== 'complete');
-  if (next) location.hash = '#sets/' + next.code;
-  else { toast('Every product is complete.'); render(); }
+// Opens the Collection list on some printings, in card number order.
+// The list's own order (sort) leaves your saved sort as it was, for "Show all cards" and later visits.
+function collectionCards(label, codes) {
+  collectionFrom({ hideRotated: false }, { label, codes: new Set(codes), sort: 'set' });
 }
 
-function onSetsKey(e) {
-  if (UI.view !== 'sets' || UI.modal || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey || e.altKey) return;
-  const tiles = $$('.ptile');
-  const tile = tiles[UI.wfocus];
-  if (!tile) return;
-  const code = tile.dataset.code, o = own(code);
-  const cols = tiles.filter(t => t.offsetTop === tiles[0].offsetTop).length || 1;
-  const k = e.key;
-  if (S.locked && /^([0-9]|[-+=_aA])$/.test(k)) { e.preventDefault(); return toast('Collection is locked. Use the lock at the top to change counts.'); }
+// Typing counts in the Collection list: click a row, then ↑/↓ move, 0–9 set the count, +/− adjust, A / Shift+A alt art.
+function focusRow(tr, scroll = true) {
+  for (const x of $$('#items tr.focus')) x.classList.remove('focus');
+  UI.lfocus = tr?.dataset.code || null;
+  if (!tr) return;
+  tr.classList.add('focus');
+  if (scroll) tr.scrollIntoView({ block: 'nearest' });
+}
+
+function onListKey(e) {
+  if (UI.view !== 'collection' || UI.modal || !UI.lfocus || e.target.closest?.('input, textarea, select') || e.ctrlKey || e.metaKey || e.altKey) return;
+  const tr = $(`#items tr[data-code="${CSS.escape(UI.lfocus)}"]`);
+  if (!tr) return;
+  const k = e.key, code = UI.lfocus, o = own(code);
+  if (k === 'ArrowDown' || k === 'ArrowUp') {
+    const next = k === 'ArrowDown' ? tr.nextElementSibling : tr.previousElementSibling;
+    if (next) { e.preventDefault(); focusRow(next); }
+    return;
+  }
+  if (k === 'Escape') return focusRow(null);
+  if (!/^([0-9]|[-+=_aA])$/.test(k)) return;
+  e.preventDefault();
+  if (S.locked) return toast('Collection is locked. Use the lock at the top to change counts.');
   if (/^[0-9]$/.test(k)) setOwn(code, +k);
   else if (k === '+' || k === '=') setOwn(code, o.n + 1);
   else if (k === '-' || k === '_') setOwn(code, o.n - 1);
-  else if (k === 'a') setOwn(code, o.n, o.custom >= o.n ? 0 : o.custom + 1);
-  else if (k === 'A') setOwn(code, o.n, o.custom - 1);
-  else if (k === 'ArrowRight') return e.preventDefault(), setFocus(UI.wfocus + 1);
-  else if (k === 'ArrowLeft') return e.preventDefault(), setFocus(UI.wfocus - 1);
-  else if (k === 'ArrowDown') return e.preventDefault(), setFocus(UI.wfocus + cols);
-  else if (k === 'ArrowUp') return e.preventDefault(), setFocus(UI.wfocus - cols);
-  else if (k === 'Enter') {
-    // Enter on a focused control outside the grid (Clear, the menu, a link) presses it, as usual.
-    if (e.target.closest('button, a, summary') && !e.target.closest('#pgrid')) return;
-    return e.preventDefault(), act.packDone();
-  }
-  else return;
-  e.preventDefault();
+  else if (k === 'a') setOwn(code, Math.max(o.n, o.custom + 1), o.custom + 1);
+  else setOwn(code, o.n, o.custom - 1);
   refresh(DB.byCode.get(code).key);
 }
 
@@ -1055,6 +1070,7 @@ function viewDeck(app) {
             : `<button class="primary" data-act="deck-build">${sum.status === 'ok' ? 'Build it (borrow cards)' : sum.print ? 'Build with printed cards…' : 'Take apart other decks and build…'}</button>`}
           ${!deck.built ? [...sum.decks.entries()].map(([d, n]) => `<button data-act="deck-unbuild" data-id="${d.id}">Deconstruct ${esc(d.name)} <span class="muted">(has ${n} you need)</span></button>`).join('') : ''}
           ${sum.print ? `<button data-act="show-print">Print list (${sum.print})</button>` : ''}
+          <button data-act="proxy-open">Proxy sheet</button>
           <button data-act="copy-deck">Deck list</button>
           <button class="danger" data-act="deck-delete">Delete</button>
         </div>
@@ -1071,6 +1087,42 @@ function viewDeck(app) {
       return `<h3>${TYPE_NAMES[type]} <span class="muted">${rs.reduce((a, r) => a + r.qty, 0)}</span></h3>
         <table class="list compact"><tbody>${rs.map(r => planRow(r, deck)).join('')}</tbody></table>`;
     }).join('')}
+  </div>`;
+}
+
+/* ---------- proxy sheet ---------- */
+
+// Card images at real size (63 × 88 mm), nine to a page, to print and cut out.
+// missing: cards you don't own · notfree: also those held by other built decks · all: the whole deck.
+const PROXY_MODES = [['missing', 'Not owned'], ['notfree', 'Not free'], ['all', 'Whole deck']];
+
+function proxyList(deck, mode) {
+  const { rows } = planDeck(deck);
+  return rows.map(r => ({ t: r.t, n: mode === 'all' ? r.qty : mode === 'notfree' ? r.print + r.borrowN : r.print }))
+    .filter(x => x.n > 0)
+    .sort((a, b) => TYPES.indexOf(a.t.type) - TYPES.indexOf(b.t.type) || a.t.title.localeCompare(b.t.title));
+}
+
+function viewProxies(app) {
+  const deck = S.decks.find(d => d.id === UI.arg);
+  if (!deck) { app.innerHTML = '<p class="empty">Deck not found. <a href="#decks">Back to decks</a></p>'; return; }
+  const mode = PROXY_MODES.some(([v]) => v === UI.proxyMode) ? UI.proxyMode : planDeck(deck).sum.print ? 'missing' : 'all';
+  const list = proxyList(deck, mode), total = list.reduce((a, x) => a + x.n, 0);
+  app.innerHTML = `
+  <div class="proxy-page">
+    <div class="proxy-tools">
+      <a href="#deck/${deck.id}" class="back">← ${esc(deck.name || 'Deck')}</a>
+      <h1>Proxy sheet</h1>
+      <p class="muted">Card images at real size, nine to a page. Print at 100% (no "fit to page"), then cut along the lines.</p>
+      <div class="row">
+        <span class="seg">${PROXY_MODES.map(([v, l]) => `<button class="${mode === v ? 'on' : ''}" data-act="proxy-mode" data-v="${v}">${l}</button>`).join('')}</span>
+        <button class="primary" data-act="proxy-print" ${total ? '' : 'disabled'}>Print ${plural(total, 'card')}</button>
+        ${mode === 'missing' && total ? '<button data-act="mark-printed">I printed them</button>' : ''}
+      </div>
+    </div>
+    ${total ? `<div class="proxy-sheet">${list.flatMap(x => Array(x.n).fill(
+      `<div class="proxy">${cardImg(x.t.newest.code, x.t.title, 'large')}</div>`)).join('')}</div>`
+      : `<p class="empty">${mode === 'all' ? 'This deck has no cards yet.' : 'Nothing to print: you have every card for this deck.'}</p>`}
   </div>`;
 }
 
@@ -1188,7 +1240,7 @@ function viewStats(app) {
   const o = UI.stats;
   if (!Object.keys(S.owned).length) {
     app.innerHTML = `<div class="sx"><h1>Stats</h1>
-      <p class="empty">Add some cards first: <a href="#welcome">run setup</a> or <a href="#sets">add by set</a>.</p></div>`;
+      <p class="empty">Add some cards first: <a href="#sets">add whole products</a> or <a href="javascript:" data-act="add-list-open">paste a list</a>.</p></div>`;
     return;
   }
   const s = statsFor(o);
@@ -1219,7 +1271,7 @@ function viewStats(app) {
 
 function statsSets(s, o) {
   const sets = o.hideUnowned ? s.sets.filter(x => x.have) : s.sets;
-  const row = (x, icon) => `<a class="sx-row ${x.have ? '' : 'faded'}" href="#sets/${x.p.code}">
+  const row = (x, icon) => `<a class="sx-row ${x.have ? '' : 'faded'}" href="javascript:" data-act="pack-cards" data-v="${x.p.code}">
     <span class="sx-name">${icon ? setIcon(x.p.cycle_code) : ''}${esc(x.p.name)}</span>
     ${bar([{ pct: 100 * x.have / x.need }], `${x.have} / ${x.need} · ${pct(x.have, x.need)}%`)}</a>`;
   let rows;
@@ -1328,8 +1380,8 @@ function statsShopping(s) {
       <div>
         <h3>Closest sets</h3>
         ${close.length ? `<table class="list compact"><tbody>${top('close', close).map(x => `<tr>
-          <td>${setIcon(x.p.cycle_code)}<a href="#sets/${x.p.code}">${esc(x.p.name)}</a></td>
-          <td><a href="javascript:" data-act="sets-short" data-v="${x.p.code}">${plural(x.need - x.have, 'card')} missing</a></td>
+          <td>${setIcon(x.p.cycle_code)}<a href="javascript:" data-act="pack-cards" data-v="${x.p.code}">${esc(x.p.name)}</a></td>
+          <td><a href="javascript:" data-act="pack-missing" data-v="${x.p.code}">${plural(x.need - x.have, 'card')} missing</a></td>
           <td class="q">${pct(x.have, x.need)}%</td></tr>`).join('')}</tbody></table>${sxMore('close', close.length)}`
           : '<p class="muted">No sets between 80 and 99% complete.</p>'}
       </div>
@@ -1605,6 +1657,34 @@ function renderAddList(el) {
   $('#add-list-in').focus();
 }
 
+// The cards of the current page, in order: the whole filtered Collection list (not just the rows loaded so far),
+// or the card links on any other page, each card once.
+function cardSequence() {
+  if (UI.view === 'collection' && UI.listRows) return UI.listRows.map(r => ({ key: r.t.key, code: r.p.code }));
+  const seen = new Set();
+  return $$('#app [data-act="card"]').map(a => ({ key: a.dataset.key, code: a.dataset.code || null }))
+    .filter(x => DB.titles.has(x.key) && !seen.has(x.key + ' ' + x.code) && seen.add(x.key + ' ' + x.code));
+}
+
+function modalStep(d) {
+  const x = UI.modalSeq?.[(UI.modalIdx ?? -1) + d];
+  if (!x || UI.modalIdx < 0) return;
+  UI.modalIdx += d;
+  UI.modal = x.key;
+  UI.modalCode = x.code;
+  // In the Collection list, the row follows along, so closing leaves you where you got to.
+  const row = x.code && UI.view === 'collection' && $(`#items tr[data-code="${CSS.escape(x.code)}"]`);
+  if (row) focusRow(row);
+  renderModal();
+  // Fetch the next image ahead, so stepping on shows it at once.
+  const after = UI.modalSeq[UI.modalIdx + d];
+  if (after) {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = imgUrl(after.code || mainPrinting(DB.titles.get(after.key)).code, 'large');
+  }
+}
+
 function renderModal() {
   const el = $('#modal');
   if (UI.modal === ':add-list') return renderAddList(el);
@@ -1614,12 +1694,23 @@ function renderModal() {
   const shown = DB.byCode.get(UI.modalCode) || mainPrinting(t);
   const decks = S.decks.map(d => ({ d, e: deckEntries(d).find(e => e.key === t.key) })).filter(x => x.e);
   const c = t.newest;
+  const seq = UI.modalSeq || [], i = UI.modalIdx ?? -1;
+  // Previous / next: on the backdrop either side of the box (.out), or beside the image on phones (.in), where a
+  // bottom sheet leaves no room outside. A gap keeps the box centred when there is no previous or next.
+  const step = (d, where) => {
+    const label = d < 0 ? 'Previous card' : 'Next card';
+    if (!seq[i + d] || i < 0) return where === 'out' ? '<span class="mnav-gap"></span>' : '';
+    return `<button class="mnav ${where} ${d < 0 ? 'prev' : 'next'}" data-act="modal-step" data-d="${d}" aria-label="${label}" title="${label} (${d < 0 ? '←' : '→'})">${d < 0 ? '‹' : '›'}</button>`;
+  };
   el.hidden = false;
   el.innerHTML = `
+  <div class="modal-wrap">
+  ${step(-1, 'out')}
   <div class="modal-box" role="dialog" aria-label="${esc(t.title)}">
     <button class="close" data-act="modal-close" aria-label="Close">×</button>
-    <div class="modal-img">${cardImg(shown.code, t.title, 'large')}</div>
+    <div class="modal-img">${cardImg(shown.code, t.title, 'large')}${step(-1, 'in')}${step(1, 'in')}</div>
     <div class="modal-body">
+      ${i >= 0 && seq.length > 1 ? `<div class="mcount muted">${i + 1} of ${seq.length}</div>` : ''}
       <h2>${esc(t.title)}</h2>
       <div class="muted">${fname(t.faction)} · ${TYPE_NAMES[t.type] || t.type}${c.keywords ? ': ' + esc(c.keywords) : ''}${c.faction_cost ? ' · influence ' + c.faction_cost : ''}</div>
       <p class="text">${cardText(c.text)}</p>
@@ -1638,39 +1729,22 @@ function renderModal() {
         : '<p class="muted">Not in any deck.</p>'}
       <p><a href="https://netrunnerdb.com/en/card/${shown.code}" target="_blank" rel="noopener">View on NetrunnerDB ↗</a></p>
     </div>
+  </div>
+  ${step(1, 'out')}
   </div>`;
 }
 
 /* ---------- refresh after a count change ---------- */
 
-// Swap a tile for freshly rendered HTML, keeping its already loaded image so it doesn't flicker.
-function replaceTile(el, html) {
-  const tpl = document.createElement('template');
-  tpl.innerHTML = html.trim();
-  const fresh = tpl.content.firstElementChild;
-  const oldImg = $('.tile-img img', el), newImg = $('.tile-img img', fresh);
-  if (oldImg && newImg && oldImg.src === newImg.src) newImg.replaceWith(oldImg);
-  el.replaceWith(fresh);
-}
-
 function refresh(key) {
   const locks = computeLocks();
   const t = DB.titles.get(key);
-  for (const el of $$(`#items tr${sel(key)}`)) el.outerHTML = titleRow(t, locks);
-  if ($('#stats')) $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${UI.resultsCount}</span>`;
-  for (const el of $$(`.ptile${sel(key)}`)) replaceTile(el, printTile(DB.byCode.get(el.dataset.code), +el.dataset.i));
-  if (UI.view === 'sets') {
-    const pack = DB.packByCode.get(UI.setsPack);
-    const side = $('#sets-side'), top = side.scrollTop;
-    side.innerHTML = setsSidebar(pack);
-    side.scrollTop = top;
-    $('#pack-progress').innerHTML = packCopiesText(pack);
-    $('#pack-state').innerHTML = statePill(packState(pack));
-    $('#pack-bar-progress').innerHTML = packProgress(pack);
-    const opt = $(`#pack-jump option[value="${pack.code}"]`);
-    if (opt) opt.innerHTML = packOption(pack);
+  for (const el of $$(`#items tr${sel(key)}`)) {
+    const span = el.dataset.span === '' ? null : +el.dataset.span;
+    el.outerHTML = printingRow(t, DB.byCode.get(el.dataset.code), locks, span);
   }
-  if (UI.view === 'deck' || UI.view === 'decks' || UI.view === 'stats') render();
+  if ($('#stats')) $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${UI.resultsCount}</span>`;
+  if (['deck', 'decks', 'stats', 'proxies'].includes(UI.view)) render();
   else renderModal();
 }
 
@@ -1679,7 +1753,14 @@ function refresh(key) {
 const currentDeck = () => S.decks.find(d => d.id === UI.arg);
 
 const act = {
-  'card': el => { UI.modal = el.dataset.key; UI.modalCode = null; renderModal(); },
+  'card': el => {
+    UI.modal = el.dataset.key; UI.modalCode = el.dataset.code || null;
+    // Previous / next go through the cards of the page it was opened from, in the order shown.
+    UI.modalSeq = cardSequence();
+    UI.modalIdx = UI.modalSeq.findIndex(x => x.key === UI.modal && (!x.code || x.code === UI.modalCode));
+    renderModal();
+  },
+  'modal-step': el => modalStep(+el.dataset.d),
   'modal-close': () => { UI.modal = null; renderModal(); },
   'add-list-open': () => { UI.modal = ':add-list'; renderModal(); },
   'add-list': async () => {
@@ -1713,16 +1794,23 @@ const act = {
   // On "Could not start", whether it failed before or after the collection loaded.
   'retry': () => location.reload(),
   'modal-show': el => { UI.modalCode = el.dataset.code; renderModal(); },
-  'title-n': el => { adjustTitle(el.dataset.key, +el.dataset.d); refresh(el.dataset.key); },
+  'sort': el => {
+    const f = UI.filters, v = el.dataset.v;
+    // A product's card list starts in its own order; a heading tapped there takes over from it.
+    if (UI.only?.sort) { Object.assign(f, listSort()); delete UI.only.sort; }
+    // The same column again flips the order; a new one starts A–Z, or most first for counts.
+    if (f.sort === v) f.dir = f.dir === 'desc' ? 'asc' : 'desc';
+    else { f.sort = v; f.dir = SORT_NUMERIC.has(v) ? 'desc' : 'asc'; }
+    saveFilters();
+    renderResults();
+  },
   'print-n': el => { const c = el.dataset.code; setOwn(c, own(c).n + +el.dataset.d); refresh(DB.byCode.get(c).key); },
-  'set-n': el => { const c = el.dataset.code; setOwn(c, +el.dataset.n); refresh(DB.byCode.get(c).key); },
   'alt': el => {
     const c = el.dataset.code, o = own(c), d = +el.dataset.d;
     // Adding alt art to a card you don't have yet means you have that copy.
     setOwn(c, Math.max(o.n, o.custom + d), o.custom + d);
     refresh(DB.byCode.get(c).key);
   },
-  'focus': el => setFocus(+el.dataset.i),
 
   'f-side': el => { UI.filters.side = el.dataset.v; UI.filters.faction = ''; UI.filters.type = ''; saveFilters(); render(); },
   'f-set': el => { UI.filters.set = el.dataset.v; saveFilters(); render(); },
@@ -1743,33 +1831,43 @@ const act = {
     toast(S.locked ? 'Collection locked. Counts can\'t be changed until you unlock it.' : 'Collection unlocked.');
   },
 
-  // From Collection: the filtered set's first product if a set is picked, else the next product to go through.
+  // From Collection: the picked set's first product, else every product.
   'sets-open': () => {
     const p = UI.filters.set && visiblePacks().find(x => x.cycle_code === UI.filters.set);
     location.hash = p ? '#sets/' + p.code : '#sets';
   },
-  // data-v: the product to show only its missing cards of; empty shows every card again.
-  'sets-short': el => {
-    const code = el.dataset.v;
-    UI.setsShort = code ? { pack: code, codes: null } : null;
-    if (code && location.hash !== '#sets/' + code) location.hash = '#sets/' + code; else render();
-  },
   'sets-filter': el => { UI.setsFilter = el.dataset.v; store.set('setsFilter', UI.setsFilter); render(); },
   'sets-rotated': el => { UI.setsHideRotated = el.checked; store.set('setsHideRotated', el.checked); render(); },
-  'pack-fill': el => {
-    const k = +el.dataset.k, pack = DB.packByCode.get(UI.setsPack);
-    if (!k && !confirm(`Set every card in ${pack.name} to 0?`)) return;
-    // Complete: at least one box's worth of each card; copies beyond that are kept.
-    for (const c of pack.cards) setOwn(c.code, k ? Math.max(own(c.code).n, c.quantity || 1) : 0);
-    // Cleared: back to not started (setOwn would otherwise have marked it in progress).
-    if (k) S.packStatus[pack.code] = 'done'; else delete S.packStatus[pack.code];
+  'pack-cards': el => { const p = DB.packByCode.get(el.dataset.v); collectionCards(p.name, p.cards.map(c => c.code)); },
+  // The cards short of the next box (the first one, if none is complete).
+  'pack-missing': el => {
+    const p = DB.packByCode.get(el.dataset.v), boxes = boxesOwned(p);
+    collectionCards(`${p.name}: cards short of ${boxes ? 'another box' : 'a complete box'}`,
+      p.cards.filter(c => own(c.code).n < (boxes + 1) * qty(c)).map(c => c.code));
+  },
+  // Removing needs a complete box: a product short of even one box only goes with Clear.
+  'pack-box': el => {
+    const p = DB.packByCode.get(el.dataset.v), d = +el.dataset.d;
+    if (d < 0 && !boxesOwned(p)) return toast(`No complete box of ${p.name} to remove. Use Clear, or change single cards from its card list.`);
+    const next = new Map(p.cards.map(c => [c.code, own(c.code).n + d * qty(c)]));
+    const warn = d < 0 ? removalWarnings(next) : [];
+    if (warn.length && !confirm([`Remove a box of ${p.name}?`, ...warn].join('\n\n'))) return;
+    for (const [code, n] of next) setOwn(code, n);
+    if (d > 0) S.packStatus[p.code] = 'done';
+    save();
+    render();
+    toast(`${d > 0 ? 'Added' : 'Removed'} a box of ${p.name}.`);
+  },
+  'pack-clear': el => {
+    const p = DB.packByCode.get(el.dataset.v);
+    if (!p.cards.some(c => own(c.code).n)) return toast(`You have no cards of ${p.name}.`);
+    const next = new Map(p.cards.map(c => [c.code, 0]));
+    if (!confirm([`Set every card of ${p.name} to 0?`, ...removalWarnings(next)].join('\n\n'))) return;
+    for (const code of next.keys()) setOwn(code, 0);
+    delete S.packStatus[p.code];
     save();
     render();
   },
-  // packStatus is only setup's walk-through now: 'partial' = still to go through, 'done' = gone through.
-  // It's kept in the stored collection (and backups) as before, but no longer shown.
-  packDone() { S.packStatus[UI.setsPack] = 'done'; save(); nextPack(); },
-  'pack-done': () => act.packDone(),
 
   'w-complete': el => {
     const W = UI.welcome, p = el.dataset.pack;
@@ -1800,10 +1898,8 @@ const act = {
     if (UI.filters.set && !visiblePacks().some(p => p.cycle_code === UI.filters.set)) { UI.filters.set = ''; saveFilters(); }
     save(false);
     $('.menu').open = false;
-    if (UI.view === 'sets' && !pubOk(DB.packByCode.get(UI.setsPack))) { location.hash = '#sets'; return; }
     render();
   },
-  'welcome': () => { $('.menu').open = false; location.hash = '#welcome'; },
 
   'check': async () => {
     const C = UI.check;
@@ -1871,9 +1967,12 @@ const act = {
     const { sum } = planDeck(currentDeck());
     showText('Cards to print', sum.printList.map(p => `${p.n}x ${p.t.title}`).join('\n'),
       `You don't own enough of ${plural(sum.printList.length, 'card')} (${sum.print} copies). Once they're printed, mark them so this deck counts them.`,
-      `<button data-act="mark-printed">I printed them</button>`);
+      `<button data-act="proxy-open">Proxy sheet</button><button data-act="mark-printed">I printed them</button>`);
   },
   'copy-deck': () => showText('Deck list', deckText(currentDeck())),
+  'proxy-open': () => { UI.proxyMode = null; location.hash = '#proxies/' + currentDeck().id; },
+  'proxy-mode': el => { UI.proxyMode = el.dataset.v; render(); },
+  'proxy-print': () => window.print(),
   'copy-text': () => copyText(),
 
   'refresh-db': async () => {
@@ -2023,8 +2122,9 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   // Until the collection has loaded (or when starting failed) only Try again works; the menu's actions need it.
   if (!S) { if (el?.dataset.act === 'retry') act.retry(); return; }
-  const ptile = e.target.closest('.ptile');
-  if (ptile) setFocus(+ptile.dataset.i, false);
+  // A click in a Collection row picks it for typing counts.
+  const row = e.target.closest('#items tr');
+  if (row) focusRow(row, false);
   for (const d of $$('details.menu[open], details.dd[open]')) if (!d.contains(e.target) || el?.dataset.act === 'f-set') d.open = false;
   if (el && act[el.dataset.act] && el.type !== 'checkbox') {
     if (el.tagName === 'A' && el.getAttribute('href') === 'javascript:') e.preventDefault();
@@ -2036,7 +2136,8 @@ document.addEventListener('click', e => {
     act[el.dataset.act](el, e);
     return;
   }
-  if (e.target.id === 'modal') act['modal-close']();
+  // A click on the backdrop (or the space around the box and its buttons) closes the pop-up.
+  if (e.target.id === 'modal' || e.target.classList?.contains('modal-wrap') || e.target.classList?.contains('mnav-gap')) act['modal-close']();
 });
 
 document.addEventListener('change', e => {
@@ -2062,7 +2163,6 @@ document.addEventListener('change', e => {
     save();
   }
   if (el.id === 'restore-file' && el.files[0]) restoreFile(el.files[0]);
-  if (el.id === 'pack-jump') location.hash = '#sets/' + el.value;
 });
 
 let searchTimer;
@@ -2083,9 +2183,13 @@ document.addEventListener('input', e => {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && UI.modal) { act['modal-close'](); return; }
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && UI.modal && UI.modal[0] !== ':' && !e.target.closest?.('input, textarea, select')) {
+    e.preventDefault();
+    return modalStep(e.key === 'ArrowLeft' ? -1 : 1);
+  }
   if (e.target.id === 'deck-add' && e.key === 'Enter') { $('#deck-add-results button')?.click(); return; }
   if (e.target.id === 'check-in' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { act.check(); return; }
-  onSetsKey(e);
+  onListKey(e);
 });
 
 // Card images that NetrunnerDB doesn't have fall back to the title placeholder.
