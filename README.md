@@ -125,6 +125,18 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   it's free, held by another built deck, or has to be printed. Save it as a deck, then **Build** it to
   borrow the cards. **Print list** shows what you're short of, ready to copy. **I printed them** records proxies as part of that deck, so they never count
   against your collection.
+- **Proxy sheet** (on a deck): makes a PDF to print and cut out, laid out like NetrunnerDB's print-and-play: cards at
+  63.5 × 88.9 mm, nine to a page, with NetrunnerDB's 300 dpi images. Choose the cards not owned, not free or the whole
+  deck; paper (A4 or Letter; the first time, Letter in the US, Canada and a few other countries, else A4); cut marks
+  (none, lines across the page, or short marks in the margin); and bleed (a 3 or 6 mm gap between cards, which shrink
+  a little to make room). The choices are remembered on the device. Double-faced identities (Hoshiko, Earth Station,
+  Dewi, Nebula, Méliès U) also print their other faces. Print at 100%, not "fit to page".
+  **Only Null Signal Games cards are printed**: a card only Fantasy Flight Games published is greyed out, listed above
+  the preview and left out of the PDF, and *I printed them* there doesn't count it. Each card uses the image of its
+  newest Null Signal printing that has one at 300 dpi; cards printed only in System Core 2019 or System Update 2021
+  have just a 300 × 420 image on NetrunnerDB and come out less sharp. If an image can't be loaded (say offline, when no PDF
+  with that card was made on this device before), it says which and offers to try again or leave them out. The PDF library ([jsPDF](https://github.com/parallax/jsPDF)
+  4.2.1, MIT licence) is in `static/vendor/`, loaded only when making a PDF and precached for offline use.
 - **Find on NetrunnerDB** (a tab on Decks): fetches decklists published on NetrunnerDB over the last 1 to 24 months,
   keeps them in the browser, and ranks them by how many cards you'd be missing. Filter by side, faction, how many
   missing, tournament decks, and **Legal in Standard** or **Legal in Startup**, judged from each deck's cards (card

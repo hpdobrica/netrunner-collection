@@ -6,7 +6,7 @@
 <!-- Only app.js runs: a script slipped into the page (say from a crafted backup) is refused. Inline styles stay
      allowed for the faction colours in style="--fc:…". Card images and data come from NetrunnerDB. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
-  img-src 'self' https://card-images.netrunnerdb.com; connect-src 'self' https://netrunnerdb.com https://api.netrunnerdb.com; font-src 'self';
+  img-src 'self' https://card-images.netrunnerdb.com; connect-src 'self' https://netrunnerdb.com https://api.netrunnerdb.com https://card-images.netrunnerdb.com; font-src 'self';
   worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Netrunner Collection</title>
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
@@ -40,9 +40,10 @@
       <div class="menu-note" id="db-note"></div>
       <div class="menu-note about">About: an unofficial fan tool, not affiliated with or endorsed by Fantasy Flight Games,
         Wizards of the Coast, Null Signal Games or NetrunnerDB. Netrunner and Android are trademarks of Fantasy Flight
-        Publishing, Inc. and/or Wizards of the Coast LLC. Card images, text and set symbols belong to their respective owners.</div>
+        Publishing, Inc. and/or Wizards of the Coast LLC. Card images, text and set symbols belong to their respective owners.
+        Proxy sheets only print Null Signal Games cards: cards only Fantasy Flight Games published are left out.</div>
       <div class="menu-note">Card data, images and the set-symbol font from <a href="https://netrunnerdb.com" target="_blank" rel="noopener">NetrunnerDB</a>
-        (font: MIT licence, © Cédric Bertolini).</div>
+        (font: MIT licence, © Cédric Bertolini). PDFs made with <a href="https://github.com/parallax/jsPDF" target="_blank" rel="noopener">jsPDF</a> (MIT licence).</div>
     </div>
   </details>
 </header>

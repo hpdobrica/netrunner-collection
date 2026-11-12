@@ -4,12 +4,15 @@
 
 // Change VERSION with every deploy. The new worker then caches the new files and waits; the app shows
 // "New version available" and switches only when the user taps Reload.
-const VERSION = '2026-11-12.23';
+const VERSION = '2026-11-12.24';
 const SHELL = 'shell-' + VERSION;
 const IMAGES = 'images';
 const MAX_IMAGES = 600; // about 50 MB; the oldest are removed first
 const FILES = ['./', 'app.js', 'app.css', 'manifest.webmanifest', 'icons/icons.css', 'icons/netrunner.woff',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
+  'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
+  // The PDF library for proxy sheets (about 400 kB). The app loads it only to make a PDF, but it is precached so
+  // that works offline too, with card images already kept.
+  'vendor/jspdf.umd.min.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil((async () => {

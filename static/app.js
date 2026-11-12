@@ -1090,11 +1090,26 @@ function viewDeck(app) {
   </div>`;
 }
 
-/* ---------- proxy sheet ---------- */
+/* ---------- proxy sheet (PDF) ---------- */
 
-// Card images at real size (63 × 88 mm), nine to a page, to print and cut out.
+// A PDF laid out like NetrunnerDB's print-and-play (netrunnerdb.com/js/pnp.js): cards 63.5 × 88.9 mm, three by three
+// on A4 or Letter, with NetrunnerDB's 750 × 1050 px (300 dpi) images. Only Null Signal Games cards may be printed,
+// so a card only ever published by Fantasy Flight Games is shown greyed out and never goes into the PDF.
 // missing: cards you don't own · notfree: also those held by other built decks · all: the whole deck.
 const PROXY_MODES = [['missing', 'Not owned'], ['notfree', 'Not free'], ['all', 'Whole deck']];
+const PDF_OPTS = {
+  format: ['Paper', [['a4', 'A4'], ['letter', 'Letter']]],
+  cuts: ['Cut marks', [['none', 'None'], ['lines', 'Lines'], ['marks', 'Marks']]],
+  bleed: ['Bleed', [['0', 'None'], ['3', 'Narrow'], ['6', 'Wide']]],
+};
+// Letter where it's the usual paper size, A4 everywhere else.
+const LETTER_REGIONS = new Set(['US', 'CA', 'MX', 'PH', 'CL', 'CO', 'VE', 'PR', 'GT', 'CR', 'PA', 'DO', 'SV']);
+const XLARGE = 'https://card-images.netrunnerdb.com/v2/xlarge/';
+// Faces printed after a card's front, as on NetrunnerDB (multi_side_cards in pnp.js): Hoshiko, Earth Station, Dewi
+// and Nebula have a back; Méliès U prints three fronts and three backs. Keyed by printing code.
+const EXTRA_FACES = { 26066: ['-0'], 26120: ['-0'], 35023: ['-0'], 35057: ['-0'], 36036: ['', '', '-0', '-1', '-2'] };
+// The PDF being made or last made: { deckId, items, ids, opts, file, got: Map(id → image), state, … }.
+const PDF = { job: null, url: '' };
 
 function proxyList(deck, mode) {
   const { rows } = planDeck(deck);
@@ -1103,27 +1118,252 @@ function proxyList(deck, mode) {
     .sort((a, b) => TYPES.indexOf(a.t.type) - TYPES.indexOf(b.t.type) || a.t.title.localeCompare(b.t.title));
 }
 
+// A card's Null Signal Games printings, newest first; none if only Fantasy Flight Games published it.
+const nsgPrintings = t => t.printings.filter(p => p.pack.publisher === 'nsg').reverse();
+const nsgPrinting = t => nsgPrintings(t)[0];
+
+// The images that go into the PDF, in order: the copies of a card's front, then those of its other faces.
+// id is the image's name on NetrunnerDB's image server (newest printing's code, plus -0, -1… for other faces);
+// codes are the printings whose image can stand in for it, best first.
+function proxyImages(list) {
+  const out = [];
+  for (const x of list) {
+    const codes = nsgPrintings(x.t).map(p => p.code);
+    if (!codes.length) continue;
+    for (const face of ['', ...(EXTRA_FACES[codes[0]] || [])]) {
+      for (let i = 0; i < x.n; i++) out.push({ t: x.t, id: codes[0] + face, codes, face });
+    }
+  }
+  return out;
+}
+
+function pdfOpts() {
+  const o = store.get('proxyPdf', {}) || {};
+  const pick = (k, d) => PDF_OPTS[k][1].some(([v]) => v === o[k]) ? o[k] : d;
+  let region = '';
+  try { region = new Intl.Locale(navigator.language).maximize().region; } catch { /* unknown locale: A4 */ }
+  return { format: pick('format', LETTER_REGIONS.has(region) ? 'letter' : 'a4'), cuts: pick('cuts', 'lines'), bleed: pick('bleed', '0') };
+}
+
+const proxyMode = deck => PROXY_MODES.some(([v]) => v === UI.proxyMode) ? UI.proxyMode : planDeck(deck).sum.print ? 'missing' : 'all';
+const pdfBusy = job => job && (job.state === 'loading' || job.state === 'building');
+const faceName = x => x.t.title + (x.id.includes('-') ? ' (back)' : '');
+
+function pdfButton(deck, n, pages) {
+  const job = PDF.job;
+  if (job?.deckId === deck.id && job.state === 'loading') return `Loading images ${job.got.size}/${job.ids.length}`;
+  if (job?.deckId === deck.id && job.state === 'building') return 'Making the PDF…';
+  return `Download PDF <span class="n">${plural(n, 'card')}${pages ? ', ' + plural(pages, 'page') : ''}</span>`;
+}
+
+function pdfStatus(deck) {
+  const job = PDF.job;
+  if (!job || job.deckId !== deck.id) return '';
+  const names = ids => [...new Set(job.items.filter(x => ids.includes(x.id)).map(faceName))].map(esc).join(', ');
+  if (job.state === 'missing') {
+    return `<div class="banner print"><b>${plural(job.missing.length, 'card image')} could not be loaded</b>: ${names(job.missing)}.
+      ${navigator.onLine === false ? 'You are offline, and these aren\'t saved on this device yet.' : 'NetrunnerDB\'s image server may be unreachable.'}
+      <div class="row"><button class="primary" data-act="pdf-retry">Try again</button>
+        <button data-act="pdf-without">Make the PDF without them</button><button data-act="pdf-cancel">Cancel</button></div></div>`;
+  }
+  if (job.state === 'error') return `<div class="banner print">Could not make the PDF: ${esc(job.error)}</div>`;
+  if (job.state === 'done') {
+    const left = job.skipped.length ? `<br><span class="error">Left out, no image: ${names(job.skipped)}.</span>` : '';
+    const low = job.low.length ? `<br><span class="muted">Less sharp, as NetrunnerDB only has a small image of their printing
+      (System Core 2019 or System Update 2021): ${names(job.low)}.</span>` : '';
+    return `<p class="pdf-done">Saved <b>${esc(job.file)}</b> (${plural(job.pages, 'page')}, ${(job.size / 1048576).toFixed(1)} MB).
+      <a href="${PDF.url}" target="_blank" rel="noopener">Open it in a new tab</a>${left}${low}</p>`;
+  }
+  return '';
+}
+
 function viewProxies(app) {
   const deck = S.decks.find(d => d.id === UI.arg);
   if (!deck) { app.innerHTML = '<p class="empty">Deck not found. <a href="#decks">Back to decks</a></p>'; return; }
-  const mode = PROXY_MODES.some(([v]) => v === UI.proxyMode) ? UI.proxyMode : planDeck(deck).sum.print ? 'missing' : 'all';
-  const list = proxyList(deck, mode), total = list.reduce((a, x) => a + x.n, 0);
+  const mode = proxyMode(deck), list = proxyList(deck, mode);
+  const ffg = list.filter(x => !nsgPrinting(x.t)), ffgCopies = ffg.reduce((a, x) => a + x.n, 0);
+  const images = proxyImages(list), n = list.reduce((a, x) => a + (nsgPrinting(x.t) ? x.n : 0), 0);
+  const pages = Math.ceil(images.length / 9), o = pdfOpts();
+  const busy = pdfBusy(PDF.job) && PDF.job.deckId === deck.id, dis = busy ? 'disabled' : '';
+  const seg = k => `<span class="seg small">${PDF_OPTS[k][1].map(([v, l]) =>
+    `<button class="${o[k] === v ? 'on' : ''}" data-act="pdf-opt" data-k="${k}" data-v="${v}" ${dis}>${l}</button>`).join('')}</span>`;
+  const faces = images.length - n;
+  // The PDF's cards in its order, a heading where each page starts; then, greyed out, the ones that can't be printed.
+  const preview = images.map((x, i) => (i && i % 9 === 0 ? `<div class="proxy-break">Page ${i / 9 + 1}</div>` : '') +
+      `<div class="proxy">${cardImg(x.id, faceName(x), 'large')}</div>`).join('') +
+    ffg.flatMap(x => Array(x.n).fill(`<div class="proxy ffg" title="Not in the PDF: only published by Fantasy Flight Games">
+      ${cardImg(x.t.newest.code, x.t.title, 'large')}<span class="ffg-tag">Not printed</span></div>`)).join('');
   app.innerHTML = `
   <div class="proxy-page">
     <div class="proxy-tools">
       <a href="#deck/${deck.id}" class="back">← ${esc(deck.name || 'Deck')}</a>
       <h1>Proxy sheet</h1>
-      <p class="muted">Card images at real size, nine to a page. Print at 100% (no "fit to page"), then cut along the lines.</p>
+      <p class="muted">A PDF of card images at real size (63.5 × 88.9 mm), nine to a page, like NetrunnerDB's print-and-play.
+        Print it at 100% ("Actual size", not "Fit to page"), then cut along the marks. Only Null Signal Games cards are printed.</p>
+      <div class="row"><span class="seg">${PROXY_MODES.map(([v, l]) => `<button class="${mode === v ? 'on' : ''}" data-act="proxy-mode" data-v="${v}" ${dis}>${l}</button>`).join('')}</span></div>
+      <div class="pdf-opts">${Object.keys(PDF_OPTS).map(k => `<span class="pdf-opt"><span class="muted">${PDF_OPTS[k][0]}</span>${seg(k)}</span>`).join('')}</div>
+      <p class="muted small">Bleed leaves a gap between cards (narrow 3 mm, wide 6 mm); the cards shrink a little to make room.</p>
       <div class="row">
-        <span class="seg">${PROXY_MODES.map(([v, l]) => `<button class="${mode === v ? 'on' : ''}" data-act="proxy-mode" data-v="${v}">${l}</button>`).join('')}</span>
-        <button class="primary" data-act="proxy-print" ${total ? '' : 'disabled'}>Print ${plural(total, 'card')}</button>
-        ${mode === 'missing' && total ? '<button data-act="mark-printed">I printed them</button>' : ''}
+        <button class="primary" id="pdf-btn" data-act="proxy-pdf" ${n && !busy ? '' : 'disabled'}>${pdfButton(deck, n, pages)}</button>
+        ${mode === 'missing' && n ? '<button data-act="proxy-printed">I printed them</button>' : ''}
       </div>
+      ${faces > 0 ? `<p class="muted small">Includes ${plural(faces, 'extra face')} of double-faced cards: ${plural(images.length, 'image')} in all.</p>` : ''}
+      <div id="pdf-status">${pdfStatus(deck)}</div>
     </div>
-    ${total ? `<div class="proxy-sheet">${list.flatMap(x => Array(x.n).fill(
-      `<div class="proxy">${cardImg(x.t.newest.code, x.t.title, 'large')}</div>`)).join('')}</div>`
+    ${ffg.length ? `<div class="banner print ffg-note"><b>${plural(ffg.length, 'card')} can't be printed</b>${ffgCopies > ffg.length ? ` (${ffgCopies} copies)` : ''}: ${ffg.length === 1 ? 'it was' : 'they were'}
+      only published by Fantasy Flight Games, and only Null Signal Games cards may be printed. Not in the PDF:
+      ${ffg.map(x => `${x.n}× ${esc(x.t.title)}`).join(', ')}.</div>` : ''}
+    ${list.length ? `<div class="proxy-sheet">${preview}</div>`
       : `<p class="empty">${mode === 'all' ? 'This deck has no cards yet.' : 'Nothing to print: you have every card for this deck.'}</p>`}
   </div>`;
+}
+
+// Shows progress in the button without redrawing the page (and the preview images with it).
+function pdfProgress(job) {
+  const btn = $('#pdf-btn'), deck = currentDeck();
+  if (PDF.job === job && btn && deck?.id === job.deckId && UI.view === 'proxies') btn.textContent = pdfButton(deck);
+}
+
+let jspdfLoad = null;
+// jsPDF (MIT licence, static/vendor/) loads the first time a PDF is made. The service worker precaches it for offline use.
+function loadJsPdf() {
+  return jspdfLoad ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'vendor/jspdf.umd.min.js';
+    s.onload = () => window.jspdf?.jsPDF ? resolve(window.jspdf) : reject(new Error('the PDF library did not load.'));
+    s.onerror = () => { jspdfLoad = null; s.remove(); reject(new Error(offlineMsg('the PDF library could not be loaded.'))); };
+    document.head.append(s);
+  });
+}
+
+// A card image as JPEG bytes: NetrunnerDB's 750 × 1050 px (300 dpi) one, of the newest printing that has it.
+// System Core 2019 and System Update 2021 printings only have 300 × 420 ones (NetrunnerDB has no larger), so a card
+// printed only there comes out less sharp (low: true). Throws when offline or the image server can't be reached.
+async function loadProxyImage(x) {
+  for (const code of x.codes) {
+    const r = await fetch(XLARGE + code + x.face + '.webp');
+    if (r.ok) return { data: await toJpeg(await r.blob()) };
+    if (r.status !== 403 && r.status !== 404) throw new Error('HTTP ' + r.status);
+  }
+  const r = await fetch(imgUrl(x.codes[0] + x.face, 'large'));
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return { data: await toJpeg(await r.blob()), low: true };
+}
+
+// NetrunnerDB's large images are WebP, which jsPDF embeds as uncompressed pixels, so they're re-encoded as JPEG,
+// which goes into the PDF as it is: about ten times smaller.
+async function toJpeg(blob) {
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(bmp, 0, 0);
+  bmp.close?.();
+  const jpeg = await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('encode')), 'image/jpeg', 0.92));
+  return new Uint8Array(await jpeg.arrayBuffer());
+}
+
+function startPdf() {
+  const deck = currentDeck();
+  const items = proxyImages(proxyList(deck, proxyMode(deck)));
+  if (!items.length) return;
+  const safe = (deck.name || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Deck';
+  PDF.job = { deckId: deck.id, name: deck.name, items, ids: [...new Set(items.map(x => x.id))], opts: pdfOpts(),
+    file: `${safe} proxies.pdf`, got: new Map(), skipped: [] };
+  loadJsPdf().catch(() => {}); // loads alongside the images; an error shows when the PDF is made
+  return loadImages(PDF.job);
+}
+
+// Up to six at a time. They go through the service worker, which keeps them like other card images.
+async function loadImages(job) {
+  job.state = 'loading';
+  render();
+  const todo = job.ids.filter(id => !job.got.has(id));
+  let i = 0;
+  const worker = async () => {
+    while (i < todo.length && PDF.job === job) {
+      const id = todo[i++];
+      try { job.got.set(id, await loadProxyImage(job.items.find(x => x.id === id))); } catch { /* listed as missing below */ }
+      pdfProgress(job);
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  if (PDF.job !== job) return;
+  job.missing = job.ids.filter(id => !job.got.has(id));
+  if (job.missing.length) { job.state = 'missing'; render(); return; }
+  await buildPdf(job);
+}
+
+// Card size and place on the page, as NetrunnerDB lays them out: at least 6.35 mm from the paper's edge, bleed (a gap
+// between cards) shrinks the cards evenly, and the grid is centred. Unlike NetrunnerDB, cards never grow past
+// real size (its narrow bleed on A4 makes them 0.4% larger).
+function proxyLayout(pw, ph, b) {
+  const M = 6.35;
+  let s = Math.min(1, (pw - 2 * M - 2 * b) / 3 / 63.5, (ph - 2 * M - 2 * b) / 3 / 88.9);
+  if (s > 0.9999) s = 1;
+  const w = 63.5 * s, h = 88.9 * s;
+  return { w, h, b, left: (pw - 3 * w - 2 * b) / 2, top: (ph - 3 * h - 2 * b) / 2 };
+}
+
+// Lines: across the whole page, through the middle of the gaps. Marks: in the margins only, in line with every
+// card edge, 2 mm clear of the cards.
+function drawCuts(doc, L, pw, ph, kind) {
+  const { w, h, b, left, top } = L;
+  if (kind === 'lines') {
+    for (let i = 0; i < 4; i++) {
+      const y = top + i * (h + b) - b / 2, x = left + i * (w + b) - b / 2;
+      doc.line(0, y, pw, y);
+      doc.line(x, 0, x, ph);
+    }
+  } else if (kind === 'marks') {
+    const pad = 2, right = left + 3 * w + 2 * b, bottom = top + 3 * h + 2 * b;
+    const edges = (o, size) => [...new Set([0, 1, 2].flatMap(i => [o + i * (size + b), o + i * (size + b) + size]).map(v => +v.toFixed(4)))];
+    for (const x of edges(left, w)) { doc.line(x, 0, x, top - pad); doc.line(x, bottom + pad, x, ph); }
+    for (const y of edges(top, h)) { doc.line(0, y, left - pad, y); doc.line(right + pad, y, pw, y); }
+  }
+}
+
+async function buildPdf(job, skip = []) {
+  job.state = 'building';
+  job.skipped = skip;
+  render();
+  try {
+    const { jsPDF } = await loadJsPdf();
+    if (PDF.job !== job) return;
+    const { format, cuts, bleed } = job.opts;
+    const doc = new jsPDF({ unit: 'mm', format, compress: true });
+    doc.setProperties({ title: `${job.name || 'Deck'}: proxies`, creator: 'Netrunner Collection' });
+    const pw = doc.internal.pageSize.getWidth(), ph = doc.internal.pageSize.getHeight();
+    const L = proxyLayout(pw, ph, +bleed);
+    job.items.filter(x => job.got.has(x.id)).forEach((x, k) => {
+      if (k && k % 9 === 0) doc.addPage(format);
+      const col = k % 3, row = Math.floor(k % 9 / 3);
+      // The alias makes the copies of a card share one embedded image.
+      doc.addImage(job.got.get(x.id).data, 'JPEG', L.left + col * (L.w + L.b), L.top + row * (L.h + L.b), L.w, L.h, 'c' + x.id, 'NONE');
+    });
+    job.pages = doc.getNumberOfPages();
+    for (let p = 1; p <= job.pages; p++) { doc.setPage(p); drawCuts(doc, L, pw, ph, cuts); }
+    const blob = doc.output('blob');
+    if (PDF.job !== job) return;
+    if (PDF.url) URL.revokeObjectURL(PDF.url);
+    PDF.url = URL.createObjectURL(blob);
+    job.size = blob.size;
+    job.low = job.ids.filter(id => job.got.get(id)?.low);
+    job.got.clear(); // in the PDF now
+    const a = document.createElement('a');
+    a.href = PDF.url;
+    a.download = job.file;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    job.state = 'done';
+  } catch (e) {
+    job.state = 'error';
+    job.error = e.message || String(e);
+  }
+  if (PDF.job === job) render();
 }
 
 function addCardResults(q, deck) {
@@ -1972,7 +2212,22 @@ const act = {
   'copy-deck': () => showText('Deck list', deckText(currentDeck())),
   'proxy-open': () => { UI.proxyMode = null; location.hash = '#proxies/' + currentDeck().id; },
   'proxy-mode': el => { UI.proxyMode = el.dataset.v; render(); },
-  'proxy-print': () => window.print(),
+  'pdf-opt': el => { store.set('proxyPdf', { ...pdfOpts(), [el.dataset.k]: el.dataset.v }); render(); },
+  'proxy-pdf': () => startPdf(),
+  'pdf-retry': () => { if (PDF.job?.state === 'missing') loadImages(PDF.job); },
+  'pdf-without': () => {
+    const job = PDF.job;
+    if (job?.state !== 'missing') return;
+    if (job.got.size) buildPdf(job, job.missing);
+    else { PDF.job = null; render(); toast('No card image could be loaded, so there is nothing to put in a PDF.'); }
+  },
+  'pdf-cancel': () => { PDF.job = null; render(); },
+  // Only the cards the PDF can have: one only Fantasy Flight Games published is still to print.
+  'proxy-printed': () => {
+    const n = markPrinted(currentDeck(), t => !!nsgPrinting(t));
+    save(); render();
+    toast(`${plural(n, 'card')} now counted as printed copies in this deck.`);
+  },
   'copy-text': () => copyText(),
 
   'refresh-db': async () => {
@@ -2075,9 +2330,16 @@ function newDeck(name, cards, source = '') {
   return deck;
 }
 
-function markPrinted(deck) {
+// Counts the cards the deck is short of as printed copies (those `only` accepts). Returns how many.
+function markPrinted(deck, only = () => true) {
   deck.proxies = deck.proxies || {};
-  for (const r of planDeck(deck).rows) if (r.print) deck.proxies[r.key] = (deck.proxies[r.key] || 0) + r.print;
+  let n = 0;
+  for (const r of planDeck(deck).rows) {
+    if (!r.print || !only(r.t)) continue;
+    deck.proxies[r.key] = (deck.proxies[r.key] || 0) + r.print;
+    n += r.print;
+  }
+  return n;
 }
 
 // Shows text in a sheet with a copy button. Works over plain http on a phone, where the clipboard API is blocked.
