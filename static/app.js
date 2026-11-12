@@ -492,11 +492,13 @@ function route() {
   // A link with a broken %-escape (e.g. #deck/%E0) would otherwise stop the app; its argument just isn't found.
   try { UI.arg = decodeURIComponent(rest.join('/')); } catch { UI.arg = ''; }
   if (UI.view !== 'collection') UI.only = null;
+  // Setup is for the first run only; afterwards products are added on Add by set.
+  if (UI.view === 'welcome' && S.onboarded) { location.replace('#sets'); return; }
   render();
 }
 
 // Actions that change what you own. A locked collection refuses them; decks can still be built and edited.
-const LOCKED_ACTS = new Set(['print-n', 'alt', 'pack-box', 'pack-clear', 'add-list-open', 'add-list', 'welcome', 'w-finish', 'restore']);
+const LOCKED_ACTS = new Set(['print-n', 'alt', 'pack-box', 'pack-clear', 'add-list-open', 'add-list', 'w-finish', 'restore']);
 const lockNote = '<p class="lock-note">Collection is locked, so counts can\'t be changed. Use the lock at the top to unlock it.</p>';
 const LOCK_SVG = {
   true: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
@@ -559,8 +561,6 @@ function viewWelcome(app) {
       <h2><span class="num">1</span> Products you own</h2>
       <p>For each product, set how many <b>complete</b> copies you have. If you only have part of one, tick <b>Some</b>
         and you'll set its cards one by one after setup.</p>
-      ${S.onboarded ? `<p class="install-hint">The counts start at the complete copies you already own. Raise one to add
-        another copy of that product. Lowering one here doesn't remove cards; use Add by set for that.</p>` : ''}
       <div class="w-cycles">
         ${cycles.map(([cy, packs]) => `
           <div class="w-cycle">
@@ -601,9 +601,9 @@ function welcomeSummary() {
   const partial = Object.keys(W.partial).filter(k => W.partial[k]);
   const cards = complete.reduce((a, e) => a + adds(e), 0);
   const lists = W.decks.trim() ? ' Cards from the pasted lists are added too.' : '';
-  if (!complete.length && !partial.length) return lists ? lists.trim() : S.onboarded ? 'Raise a product above to add another copy of it.' : 'Pick at least one product above, or skip.';
-  return `${complete.length ? `${plural(cards, 'card')} from ${plural(complete.length, 'product')} will be added.` : 'No new complete products.'}${lists}` +
-    (partial.length ? ` After that, the cards of ${plural(partial.length, 'partial product')} open in the Collection list to set one by one.` : '');
+  if (!complete.length && !partial.length) return lists ? lists.trim() : 'Pick at least one product above, or skip.';
+  return (`${complete.length ? `${plural(cards, 'card')} from ${plural(complete.length, 'complete product')} will be added.` : ''}${lists}` +
+    (partial.length ? ` ${complete.length || lists ? 'After that, the' : 'The'} cards of ${plural(partial.length, 'partial product')} open in the Collection list to set one by one.` : '')).trim();
 }
 
 async function finishWelcome() {
@@ -611,7 +611,7 @@ async function finishWelcome() {
   W.decks = $('#w-decks').value;
   for (const [code, k] of Object.entries(W.complete)) {
     if (!k) continue;
-    // At least k boxes' worth of each card; copies beyond that are kept (setup can be run again).
+    // At least k boxes' worth of each card; copies already added (say from a restored backup) are kept.
     for (const c of DB.packByCode.get(code).cards) setOwn(c.code, Math.max(own(c.code).n, (c.quantity || 1) * k));
     S.packStatus[code] = 'done';
   }
@@ -1236,7 +1236,7 @@ function viewStats(app) {
   const o = UI.stats;
   if (!Object.keys(S.owned).length) {
     app.innerHTML = `<div class="sx"><h1>Stats</h1>
-      <p class="empty">Add some cards first: <a href="#welcome">run setup</a> or <a href="#sets">add by set</a>.</p></div>`;
+      <p class="empty">Add some cards first: <a href="#sets">add whole products</a> or <a href="javascript:" data-act="add-list-open">paste a list</a>.</p></div>`;
     return;
   }
   const s = statsFor(o);
@@ -1893,12 +1893,6 @@ const act = {
     save(false);
     $('.menu').open = false;
     render();
-  },
-  'welcome': () => {
-    $('.menu').open = false;
-    // Setup again starts from the complete boxes you already own, so raising one adds copies of that product.
-    UI.welcome = { complete: Object.fromEntries(DB.packs.map(p => [p.code, boxesOwned(p)]).filter(([, k]) => k)), partial: {}, decks: '' };
-    location.hash = '#welcome';
   },
 
   'check': async () => {

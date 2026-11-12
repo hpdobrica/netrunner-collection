@@ -102,7 +102,7 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   Copies you own of a reprint count no matter which printing they are.
 - **Setup**: tick the products you own complete (×1, ×2…) and the ones you only have part of. You can also
   paste starter/printed deck lists. Then the cards of the partial products open in the Collection list, to set
-  one by one. Run again from the ⋯ menu, setup starts from the complete boxes you own.
+  one by one. Setup is shown on the first run only; later, add products on *Add by set*.
 - **Add by set** (*Add cards: By set* on Collection): whole products only. Each shows the complete boxes you own
   and how far you are into the next one (*1 box + 204/205 of another*). **+** adds a box's worth of every card;
   **−** removes one, if you own a complete box; **Clear** sets every card to 0. Removing asks first if a built deck

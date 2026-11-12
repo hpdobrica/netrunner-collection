@@ -147,7 +147,7 @@ This answers "what would help me most?". Two short lists, top 10 each, with *Sho
 
 ## Empty and edge states
 
-- **Nothing owned yet:** the screen shows "Add some cards first" with links to setup and *Add by set*, instead of
+- **Nothing owned yet:** the screen shows "Add some cards first" with links to *Add by set* and *paste a list*, instead of
   empty charts.
 - **No decks:** section 3 shows only the donut (all free), plus a link to Decks. Section 6's first list is hidden.
 - **Card data still loading:** the usual loading message.
