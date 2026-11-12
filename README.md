@@ -6,7 +6,8 @@ Card data comes from NetrunnerDB.
 
 The app is a static web page (`static/`): no server of its own, no build step. It keeps your collection in
 your browser, fetches card data from NetrunnerDB directly, and can be installed to a phone's home screen or a
-desktop and used offline. The plan is in [docs/pwa-spec.md](docs/pwa-spec.md).
+desktop and used offline. The plan is in [docs/pwa-spec.md](docs/pwa-spec.md); the statistics screen in
+[docs/stats-spec.md](docs/stats-spec.md).
 
 **Use it at https://netrunner-collection.dobrica.sh/**
 
@@ -70,6 +71,11 @@ DevTools → Application → Service workers.
 - Card data from NetrunnerDB is cached in the browser and refreshed in the background once it's a week old.
   **Refresh card data** in the ⋯ menu fetches it now, e.g. when a new set comes out.
 
+**The backup format is in use: people have backup files and rely on restoring them.** Any change to the stored
+collection or the backup file must keep it compatible: every existing backup must still restore
+(extend `migrate()`, never drop a field it reads), and a new field must be optional. Breaking compatibility is not
+an option.
+
 Owned counts are stored per printing (NetrunnerDB card code), each with how many of those copies are
 alt art. Decks are lists of cards. A deck marked **Built** is physically assembled, so its cards are borrowed
 and no longer free. Reprints of the same title count together when checking a deck.
@@ -108,6 +114,9 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   it's free, held by another built deck, or has to be printed. Save it as a deck, then **Build** it to
   borrow the cards. **Print list** shows what you're short of, ready to copy. **I printed them** records proxies as part of that deck, so they never count
   against your collection.
+- **Stats**: the shape of the collection at a glance: totals, how complete each set is (one box as sold is 100%;
+  *Count reprints* also counts copies from other printings), how much is tied up in built decks, breakdowns by
+  faction and type, and a shopping list. Tap a bar to go to that set, deck or filtered list. Nothing new is stored.
 - **Several tabs**: a change in one tab shows up in the others. A tab that somehow missed it reloads instead
   of overwriting the newer data.
 

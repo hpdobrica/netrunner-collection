@@ -417,12 +417,17 @@ const UI = {
   welcome: { complete: {}, partial: {}, decks: '' },
   check: { text: '', result: null, error: '' },
   modal: null,
+  // Stats screen options, remembered like the Collection filters.
+  stats: Object.assign({ side: '', hideRotated: false, reprints: false, sort: 'release', hideUnowned: false }, store.get('stats', {})),
+  statsAll: {}, // shopping lists opened with Show all (this visit only)
+  only: null, // { label, keys }: a Stats tap limiting the Collection list to some titles; cleared on leaving it
 };
 
 function route() {
   const [view, ...rest] = location.hash.slice(1).split('/');
   UI.view = view || (S.onboarded ? 'collection' : 'welcome');
   UI.arg = decodeURIComponent(rest.join('/'));
+  if (UI.view !== 'collection') UI.only = null;
   if (UI.view === 'sets' && !UI.arg) {
     const packs = visiblePacks();
     const next = packs.find(p => S.packStatus[p.code] === 'partial') || packs.find(p => !S.packStatus[p.code]) || packs[0];
@@ -451,7 +456,7 @@ function render() {
   backupNote();
   for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === UI.view || (UI.view === 'deck' && a.dataset.nav === 'decks'));
   const app = $('#app');
-  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck };
+  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats };
   (views[UI.view] || viewCollection)(app);
   renderModal();
 }
@@ -599,6 +604,7 @@ function filteredTitles(locks) {
     if (f.type && t.type !== f.type) return false;
     if (f.set && !t.printings.some(p => p.pack.cycle_code === f.set)) return false;
     if (f.hideRotated && t.rotated) return false;
+    if (UI.only && !UI.only.keys.has(t.key)) return false;
     if (q && !t.search.includes(q)) return false;
     const n = titleOwned(t.key);
     switch (f.show) {
@@ -677,6 +683,7 @@ function viewCollection(app) {
     <label class="check"><input type="checkbox" data-filter="hideRotated" ${f.hideRotated ? 'checked' : ''}> Hide rotated</label>
   </div>
   ${lockNote}
+  ${UI.only ? `<p class="only-note">Showing only: ${esc(UI.only.label)} <button data-act="only-clear">Show all cards</button></p>` : ''}
   <div class="stats-row"><div class="stats" id="stats"></div><button data-act="add-list-open">+ Add cards from a list</button></div>
   <div id="results"></div>`;
   renderResults();
@@ -980,6 +987,267 @@ function addCardResults(q, deck) {
     <span class="dot" style="--fc:${fcolor(t.faction)}"></span>${esc(t.title)} <span class="muted">${TYPE_NAMES[t.type]} · owned ${titleOwned(t.key)}</span></button>`).join('');
 }
 
+/* ---------- statistics ---------- */
+
+// Percent for display. Rounds down, so nothing short of complete ever reads 100%.
+const pct = (a, b) => !b ? 0 : a >= b ? 100 : Math.floor(100 * a / b);
+// Order of the By faction chart: Runner factions, then Corp, then the two neutrals.
+const STATS_FACTIONS = ['anarch', 'criminal', 'shaper', 'adam', 'apex', 'sunny-lebeau',
+  'haas-bioroid', 'jinteki', 'nbn', 'weyland-consortium', 'neutral-runner', 'neutral-corp'];
+const STATS_TYPES = { runner: ['identity', 'event', 'hardware', 'resource', 'program'], corp: ['identity', 'agenda', 'asset', 'upgrade', 'operation', 'ice'] };
+const STATS_TOP = 10;
+
+// Walks the card data once and returns every number the Stats screen shows. Nothing here is stored.
+// o: the screen's options (side, hideRotated, reprints).
+function statsFor(o) {
+  const locks = computeLocks();
+  const titleOk = t => titleVisible(t) && (!o.side || t.side === o.side) && !(o.hideRotated && t.rotated);
+  // Draft identities aren't legal in normal decks, so the Draft product is not a set here.
+  const packOk = p => pubOk(p) && p.cycle_code !== 'draft' && !(o.hideRotated && p.cycle?.rotated);
+  const s = { cards: 0, titles: 0, titlesAll: 0, playsets: 0, alt: 0, spare: 0, inDecks: 0, proxies: 0, unknown: 0,
+    factions: new Map(), types: new Map(), sets: [], short: new Map(), deckBars: [], decks: 0 };
+  const group = (m, k) => m.get(k) || m.set(k, { titles: 0, owned: 0, full: 0, cards: 0 }).get(k);
+
+  // Copies of codes the card data doesn't know (a restore with old codes) count in Cards only.
+  for (const [code, x] of Object.entries(S.owned)) if (!DB.byCode.has(code)) s.unknown += x.n;
+  if (!o.side) s.cards += s.unknown;
+
+  for (const t of DB.titleList) {
+    if (!titleOk(t)) continue;
+    const n = titleOwned(t.key), full = n >= t.deckLimit;
+    s.titlesAll++;
+    s.cards += n;
+    s.alt += titleCustom(t.key);
+    s.spare += Math.max(0, n - t.deckLimit);
+    s.inDecks += Math.min(n, lockedQty(locks, t.key));
+    if (n) s.titles++;
+    if (full) s.playsets++;
+    for (const g of [group(s.factions, t.faction), group(s.types, t.side + ':' + t.type)]) {
+      g.titles++; g.cards += n;
+      if (n) g.owned++;
+      if (full) g.full++;
+    }
+  }
+
+  // One complete box as sold: need is the card's quantity in the product, have is capped at it.
+  for (const p of DB.packs) {
+    if (!packOk(p)) continue;
+    const cs = p.cards.filter(c => !o.side || c.side_code === o.side);
+    if (!cs.length) continue;
+    let have = 0, need = 0;
+    for (const c of cs) {
+      const q = c.quantity || 1;
+      need += q;
+      have += Math.min(q, o.reprints ? titleOwned(c.key) : own(c.code).n);
+    }
+    s.sets.push({ p, have, need });
+  }
+
+  // planDeck once per deck, shared by the deck bars, short-for-decks and the shopping list.
+  for (const d of S.decks) {
+    if (o.side && deckSide(d) !== o.side) continue;
+    s.decks++;
+    const { rows, sum } = planDeck(d, locks);
+    if (d.built) s.deckBars.push({ d, n: sum.have });
+    for (const r of rows) {
+      if (titleOk(r.t)) s.proxies += r.proxies;
+      if (!r.print) continue;
+      // Each title once, at the most copies any one deck is short of.
+      const x = s.short.get(r.key) || s.short.set(r.key, { t: r.t, n: 0, unbuilt: 0, decks: 0 }).get(r.key);
+      x.decks++;
+      x.n = Math.max(x.n, r.print);
+      if (!d.built) x.unbuilt = Math.max(x.unbuilt, r.print);
+    }
+  }
+  s.deckBars.sort((a, b) => b.n - a.n);
+  return s;
+}
+
+// A bar: coloured segments on a track (the empty rest is "missing"), with its numbers as text beside it.
+// parts: [{ pct, color, cls }]. The label is the readable value; the track is decoration.
+function bar(parts, label) {
+  return `<span class="sx-track" aria-hidden="true">${parts.map(p =>
+    `<i class="${p.cls || ''}" style="width:${Math.max(0, Math.min(100, p.pct))}%${p.color ? `;--c:${p.color}` : ''}"></i>`).join('')}</span>
+    <span class="sx-val">${label}</span>`;
+}
+
+// A donut of parts [{ n, color }] (circle strokes on a circumference of 100), with `center` in the hole.
+function donut(parts, center) {
+  const total = parts.reduce((a, p) => a + p.n, 0);
+  let at = 0;
+  const ring = (color, len, off) => `<circle cx="18" cy="18" r="15.915" fill="none" stroke-width="5" style="stroke:${color}"
+    stroke-dasharray="${len} ${100 - len}" stroke-dashoffset="${25 - off}"/>`;
+  const arcs = total ? parts.map(p => { const len = 100 * p.n / total, s = len ? ring(p.color, len, at) : ''; at += len; return s; }) : [];
+  return `<svg class="sx-donut" viewBox="0 0 36 36" aria-hidden="true">${ring('var(--panel2)', 100, 0)}${arcs.join('')}
+    <text x="18" y="18" text-anchor="middle" dominant-baseline="central">${center}</text></svg>`;
+}
+
+const sxTile = (label, value, sub = '') => `<div class="sx-tile"><div class="sx-tl">${label}</div><div class="sx-tv">${value}</div>${sub ? `<div class="sx-ts">${sub}</div>` : ''}</div>`;
+// Owned titles as two segments: a full playset solid, fewer than a playset lighter.
+const playsetParts = (g, color) => [{ pct: 100 * g.full / g.titles, color }, { pct: 100 * (g.owned - g.full) / g.titles, color, cls: 'part' }];
+const sxMore = (key, n) => n > STATS_TOP ? `<button class="sx-more" data-act="st-all" data-v="${key}">${UI.statsAll[key] ? 'Show fewer' : `Show all ${n}`}</button>` : '';
+
+function viewStats(app) {
+  const o = UI.stats;
+  if (!Object.keys(S.owned).length) {
+    app.innerHTML = `<div class="sx"><h1>Stats</h1>
+      <p class="empty">Add some cards first: <a href="#welcome">run setup</a> or <a href="#sets">add by set</a>.</p></div>`;
+    return;
+  }
+  const s = statsFor(o);
+  const complete = s.sets.filter(x => x.have >= x.need).length;
+  app.innerHTML = `
+  <div class="sx">
+    <div class="toolbar sx-opts">
+      <span class="seg">${[['', 'All'], ['runner', 'Runner'], ['corp', 'Corp']].map(([v, l]) =>
+        `<button class="${o.side === v ? 'on' : ''}" data-act="st-side" data-v="${v}">${l}</button>`).join('')}</span>
+      <label class="check"><input type="checkbox" data-stat="hideRotated" ${o.hideRotated ? 'checked' : ''}> Hide rotated</label>
+      <span class="sx-pub"><span class="muted">Products</span> ${publisherSeg()}</span>
+    </div>
+    <div class="sx-tiles">
+      ${sxTile('Cards', s.cards)}
+      ${sxTile('Titles', `${s.titles} <small>/ ${s.titlesAll}</small>`, `${pct(s.titles, s.titlesAll)}% owned`)}
+      ${sxTile('Playsets', `${s.playsets} <small>/ ${s.titlesAll}</small>`, `${pct(s.playsets, s.titlesAll)}% of titles`)}
+      ${sxTile('Sets complete', `${complete} <small>/ ${s.sets.length}</small>`, o.reprints ? 'counting reprints' : 'this printing only')}
+      ${sxTile('Alt art', s.alt, `${pct(s.alt, s.cards)}% of cards`)}
+      ${sxTile('Spare', s.spare, 'beyond a playset')}
+    </div>
+    ${s.unknown ? `<p class="muted">${plural(s.unknown, 'card')} not in the card data. ${s.unknown === 1 ? 'It counts' : 'They count'} in Cards${o.side ? ' (with no side picked)' : ''} only.</p>` : ''}
+    ${statsSets(s, o)}
+    ${statsDecks(s)}
+    <div class="sx-cols">${statsFactions(s)}${statsTypes(s, o)}</div>
+    ${statsShopping(s)}
+  </div>`;
+}
+
+function statsSets(s, o) {
+  const sets = o.hideUnowned ? s.sets.filter(x => x.have) : s.sets;
+  const row = (x, icon) => `<a class="sx-row ${x.have ? '' : 'faded'}" href="#sets/${x.p.code}">
+    <span class="sx-name">${icon ? setIcon(x.p.cycle_code) : ''}${esc(x.p.name)}</span>
+    ${bar([{ pct: 100 * x.have / x.need }], `${x.have} / ${x.need} · ${pct(x.have, x.need)}%`)}</a>`;
+  let rows;
+  if (o.sort === 'release') {
+    // Grouped by cycle; a cycle of several products gets its own total bar.
+    const cycles = new Map();
+    for (const x of sets) (cycles.get(x.p.cycle_code) || cycles.set(x.p.cycle_code, []).get(x.p.cycle_code)).push(x);
+    rows = [...cycles.values()].map(xs => {
+      if (xs.length === 1) return row(xs[0], true);
+      const cy = xs[0].p.cycle, have = xs.reduce((a, x) => a + x.have, 0), need = xs.reduce((a, x) => a + x.need, 0);
+      return `<div class="sx-row sx-cyc ${have ? '' : 'faded'}"><span class="sx-name">${setIcon(cy?.code)}${esc(cy?.name || 'Other')}</span>
+        ${bar([{ pct: 100 * have / need }], `${have} / ${need} · ${pct(have, need)}%`)}</div>
+        ${xs.map(x => row(x, false)).join('')}`;
+    }).join('');
+  } else {
+    const key = o.sort === 'pct' ? x => x.have / x.need : x => x.need - x.have;
+    rows = [...sets].sort((a, b) => key(b) - key(a) || a.p.order - b.p.order).map(x => row(x, true)).join('');
+  }
+  return `<section class="sx-sec">
+    <h2>Set completion</h2>
+    <p class="muted">One complete box as sold is 100%: the copies of each card the product came with.</p>
+    <div class="toolbar">
+      <label class="check" title="Count copies from any printing of a title"><input type="checkbox" data-stat="reprints" ${o.reprints ? 'checked' : ''}> Count reprints</label>
+      <select data-stat="sort" aria-label="Sort sets">${[['release', 'Release order'], ['pct', '% complete'], ['missing', 'Most missing']]
+        .map(([v, l]) => `<option value="${v}" ${o.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <label class="check"><input type="checkbox" data-stat="hideUnowned" ${o.hideUnowned ? 'checked' : ''}> Hide sets I don't own</label>
+    </div>
+    ${rows ? `<div class="sx-bars">${rows}</div>` : '<p class="muted">No sets match these options.</p>'}
+  </section>`;
+}
+
+function statsDecks(s) {
+  const free = s.cards - s.inDecks;
+  const legend = [['Free', free, 'var(--accent)'], ['In built decks', s.inDecks, 'var(--built)']].map(([l, n, c]) =>
+    `<li><span class="sx-sw" style="background:${c}"></span>${l} <b>${n}</b> <span class="muted">${pct(n, s.cards)}%</span></li>`).join('');
+  const max = Math.max(1, ...s.deckBars.map(x => x.n));
+  const short = [...s.short.values()].filter(x => x.unbuilt);
+  const shortN = short.reduce((a, x) => a + x.unbuilt, 0);
+  const unbuilt = S.decks.some(d => !d.built);
+  return `<section class="sx-sec">
+    <h2>Free vs in decks</h2>
+    <div class="sx-donut-row">
+      ${donut([{ n: free, color: 'var(--accent)' }, { n: s.inDecks, color: 'var(--built)' }], s.cards)}
+      <ul class="sx-legend">${legend}
+        ${s.proxies ? `<li><span class="sx-sw proxy"></span>Proxies <b>${s.proxies}</b> <span class="muted">printed, not counted</span></li>` : ''}</ul>
+    </div>
+    ${!S.decks.length ? '<p class="muted">No decks yet. Add one under <a href="#decks">Decks</a>.</p>' : `
+      <h3>Per built deck</h3>
+      ${s.deckBars.length ? `<div class="sx-bars">${s.deckBars.map(({ d, n }) => {
+        const id = deckIdentity(d), c = id ? fcolor(id.faction) : '#888';
+        return `<a class="sx-row" href="#deck/${d.id}"><span class="sx-name"><span class="dot" style="--fc:${c}"></span>${esc(d.name || 'Untitled deck')}</span>
+          ${bar([{ pct: 100 * n / max, color: c }], `${plural(n, 'card')}`)}</a>`;
+      }).join('')}</div>` : '<p class="muted">No built decks.</p>'}
+      <h3>Short for saved decks</h3>
+      <p>${!unbuilt ? '<span class="muted">Every saved deck is built.</span>'
+        : !shortN ? 'Nothing to print: you own every card your unbuilt decks need.'
+        : `<a href="javascript:" data-act="st-short"><b>${shortN}</b> ${shortN === 1 ? 'copy' : 'copies'} of ${plural(short.length, 'title')}</a>
+          <span class="muted">to print to build every unbuilt deck</span>`}</p>`}
+  </section>`;
+}
+
+function statsFactions(s) {
+  const fs = STATS_FACTIONS.filter(f => s.factions.get(f)?.titles);
+  const both = fs.some(f => RUNNER_FACTIONS.includes(f)) && fs.some(f => CORP_FACTIONS.includes(f));
+  const name = f => both && f.startsWith('neutral') ? `Neutral ${f === 'neutral-corp' ? 'Corp' : 'Runner'}` : fname(f);
+  return `<section class="sx-sec">
+    <h2>By faction</h2>
+    <p class="muted">Cards owned · % of titles with a full playset (solid; light: some copies).</p>
+    <div class="sx-bars">${fs.map(f => {
+      const g = s.factions.get(f);
+      return `<a class="sx-row" href="javascript:" data-act="st-faction" data-v="${f}"><span class="sx-name"><span class="dot" style="--fc:${fcolor(f)}"></span>${name(f)}</span>
+        ${bar(playsetParts(g, fcolor(f)), `${plural(g.cards, 'card')} · ${pct(g.full, g.titles)}%`)}</a>`;
+    }).join('')}</div>
+  </section>`;
+}
+
+function statsTypes(s, o) {
+  const sides = o.side ? [o.side] : ['runner', 'corp'];
+  return `<section class="sx-sec">
+    <h2>By type</h2>
+    <p class="muted">Titles owned / titles · % with a full playset (solid; light: some copies).</p>
+    ${sides.map(side => `${sides.length > 1 ? `<h3>${side === 'runner' ? 'Runner' : 'Corp'}</h3>` : ''}
+      <div class="sx-bars">${STATS_TYPES[side].filter(t => s.types.get(side + ':' + t)?.titles).map(t => {
+        const g = s.types.get(side + ':' + t);
+        return `<a class="sx-row" href="javascript:" data-act="st-type" data-v="${t}" data-side="${side}"><span class="sx-name">${TYPE_NAMES[t]}</span>
+          ${bar(playsetParts(g), `${g.owned} / ${g.titles} · ${pct(g.full, g.titles)}%`)}</a>`;
+      }).join('')}</div>`).join('')}
+  </section>`;
+}
+
+function statsShopping(s) {
+  const need = [...s.short.values()].sort((a, b) => b.decks - a.decks || b.n - a.n || a.t.title.localeCompare(b.t.title));
+  const close = s.sets.filter(x => x.have < x.need && x.have / x.need >= .8).sort((a, b) => b.have / b.need - a.have / a.need || a.p.order - b.p.order);
+  const top = (key, list) => UI.statsAll[key] ? list : list.slice(0, STATS_TOP);
+  return `<section class="sx-sec">
+    <h2>Shopping list</h2>
+    <div class="sx-cols">
+      ${s.decks ? `<div>
+        <h3>Most needed for your decks</h3>
+        ${need.length ? `<table class="list compact"><tbody>${top('need', need).map(x => `<tr>
+          <td class="q">${x.n}×</td>
+          <td><span class="dot" style="--fc:${fcolor(x.t.faction)}"></span><a href="javascript:" data-act="card" data-key="${esc(x.t.key)}">${esc(x.t.title)}</a></td>
+          <td class="muted">${x.decks === 1 ? '1 deck' : `${x.decks} decks`}</td></tr>`).join('')}</tbody></table>${sxMore('need', need.length)}`
+          : '<p class="muted">Your decks need nothing you don\'t own.</p>'}
+      </div>` : ''}
+      <div>
+        <h3>Closest sets</h3>
+        ${close.length ? `<table class="list compact"><tbody>${top('close', close).map(x => `<tr>
+          <td>${setIcon(x.p.cycle_code)}<a href="#sets/${x.p.code}">${esc(x.p.name)}</a></td>
+          <td class="muted">${plural(x.need - x.have, 'card')} missing</td>
+          <td class="q">${pct(x.have, x.need)}%</td></tr>`).join('')}</tbody></table>${sxMore('close', close.length)}`
+          : '<p class="muted">No sets between 80 and 99% complete.</p>'}
+      </div>
+    </div>
+  </section>`;
+}
+
+// Opens the Collection list from a Stats tap, with only the filters that tap is about.
+function collectionFrom(changes, only = null) {
+  Object.assign(UI.filters, { q: '', side: '', faction: '', type: '', set: '', show: 'all', hideRotated: UI.stats.hideRotated }, changes);
+  saveFilters();
+  UI.only = only;
+  location.hash = '#collection';
+}
+
 /* ---------- card details modal ---------- */
 
 const SYMBOLS = { credit: '¢', click: '⏱', 'recurring-credit': '↺¢', subroutine: '↳', trash: '🗑', mu: 'MU', link: '⛓', interrupt: '⚡' };
@@ -1066,7 +1334,7 @@ function refresh(key) {
     const opt = $(`#pack-jump option[value="${pack.code}"]`);
     if (opt) opt.textContent = opt.textContent.replace(/\(\d+\//, `(${packOwned(pack)}/`);
   }
-  if (UI.view === 'deck' || UI.view === 'decks') render();
+  if (UI.view === 'deck' || UI.view === 'decks' || UI.view === 'stats') render();
   else renderModal();
 }
 
@@ -1109,6 +1377,16 @@ const act = {
 
   'f-side': el => { UI.filters.side = el.dataset.v; UI.filters.faction = ''; UI.filters.type = ''; saveFilters(); render(); },
   'f-set': el => { UI.filters.set = el.dataset.v; saveFilters(); render(); },
+  'only-clear': () => { UI.only = null; render(); },
+
+  'st-side': el => { UI.stats.side = el.dataset.v; store.set('stats', UI.stats); render(); },
+  'st-all': el => { UI.statsAll[el.dataset.v] = !UI.statsAll[el.dataset.v]; render(); },
+  'st-faction': el => { const f = el.dataset.v; collectionFrom({ faction: f, side: CORP_FACTIONS.includes(f) ? 'corp' : 'runner' }); },
+  'st-type': el => collectionFrom({ type: el.dataset.v, side: el.dataset.side }),
+  'st-short': () => {
+    const keys = [...statsFor(UI.stats).short.values()].filter(x => x.unbuilt).map(x => x.t.key);
+    collectionFrom({}, { label: 'cards short for saved decks', keys: new Set(keys) });
+  },
   'lock': () => {
     S.locked = !S.locked;
     save(false);
@@ -1251,6 +1529,8 @@ const act = {
 
 /* ---------- backup and restore ---------- */
 
+// People already keep backup files, so the format must stay compatible: every old backup must still restore
+// (through migrate()), and anything new must be optional. Breaking it is not an option.
 const BACKUP_APP = 'netrunner-collection';
 const backupName = (iso, suffix = '') => `netrunner-collection-${localDate(iso)}${suffix}.json`;
 // YYYY-MM-DD in local time, for file names.
@@ -1385,6 +1665,11 @@ document.addEventListener('change', e => {
     UI.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
     saveFilters();
     renderResults();
+  }
+  if (el.dataset.stat) {
+    UI.stats[el.dataset.stat] = el.type === 'checkbox' ? el.checked : el.value;
+    store.set('stats', UI.stats);
+    render();
   }
   if (el.dataset.deckField) {
     currentDeck()[el.dataset.deckField] = el.value;
