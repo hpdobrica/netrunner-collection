@@ -793,7 +793,7 @@ let resultsObserver = null;
 
 function renderResults() {
   const locks = computeLocks();
-  const rows = filteredRows(locks);
+  const rows = UI.listRows = filteredRows(locks);
   UI.resultsCount = rows.length;
   $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${rows.length}</span>`;
   // A list, not card images: browsing the collection downloads no images (images show in a card's details).
@@ -1645,6 +1645,34 @@ function renderAddList(el) {
   $('#add-list-in').focus();
 }
 
+// The cards of the current page, in order: the whole filtered Collection list (not just the rows loaded so far),
+// or the card links on any other page, each card once.
+function cardSequence() {
+  if (UI.view === 'collection' && UI.listRows) return UI.listRows.map(r => ({ key: r.t.key, code: r.p.code }));
+  const seen = new Set();
+  return $$('#app [data-act="card"]').map(a => ({ key: a.dataset.key, code: a.dataset.code || null }))
+    .filter(x => DB.titles.has(x.key) && !seen.has(x.key + ' ' + x.code) && seen.add(x.key + ' ' + x.code));
+}
+
+function modalStep(d) {
+  const x = UI.modalSeq?.[(UI.modalIdx ?? -1) + d];
+  if (!x || UI.modalIdx < 0) return;
+  UI.modalIdx += d;
+  UI.modal = x.key;
+  UI.modalCode = x.code;
+  // In the Collection list, the row follows along, so closing leaves you where you got to.
+  const row = x.code && UI.view === 'collection' && $(`#items tr[data-code="${CSS.escape(x.code)}"]`);
+  if (row) focusRow(row);
+  renderModal();
+  // Fetch the next image ahead, so stepping on shows it at once.
+  const after = UI.modalSeq[UI.modalIdx + d];
+  if (after) {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = imgUrl(after.code || mainPrinting(DB.titles.get(after.key)).code, 'large');
+  }
+}
+
 function renderModal() {
   const el = $('#modal');
   if (UI.modal === ':add-list') return renderAddList(el);
@@ -1654,12 +1682,15 @@ function renderModal() {
   const shown = DB.byCode.get(UI.modalCode) || mainPrinting(t);
   const decks = S.decks.map(d => ({ d, e: deckEntries(d).find(e => e.key === t.key) })).filter(x => x.e);
   const c = t.newest;
+  const seq = UI.modalSeq || [], i = UI.modalIdx ?? -1;
+  const step = (d, label, ch) => seq[i + d] ? `<button class="mnav ${d < 0 ? 'prev' : 'next'}" data-act="modal-step" data-d="${d}" aria-label="${label}" title="${label} (${d < 0 ? '←' : '→'})">${ch}</button>` : '';
   el.hidden = false;
   el.innerHTML = `
   <div class="modal-box" role="dialog" aria-label="${esc(t.title)}">
     <button class="close" data-act="modal-close" aria-label="Close">×</button>
-    <div class="modal-img">${cardImg(shown.code, t.title, 'large')}</div>
+    <div class="modal-img">${cardImg(shown.code, t.title, 'large')}${i >= 0 ? step(-1, 'Previous card', '‹') + step(1, 'Next card', '›') : ''}</div>
     <div class="modal-body">
+      ${i >= 0 && seq.length > 1 ? `<div class="mcount muted">${i + 1} of ${seq.length}</div>` : ''}
       <h2>${esc(t.title)}</h2>
       <div class="muted">${fname(t.faction)} · ${TYPE_NAMES[t.type] || t.type}${c.keywords ? ': ' + esc(c.keywords) : ''}${c.faction_cost ? ' · influence ' + c.faction_cost : ''}</div>
       <p class="text">${cardText(c.text)}</p>
@@ -1700,7 +1731,14 @@ function refresh(key) {
 const currentDeck = () => S.decks.find(d => d.id === UI.arg);
 
 const act = {
-  'card': el => { UI.modal = el.dataset.key; UI.modalCode = el.dataset.code || null; renderModal(); },
+  'card': el => {
+    UI.modal = el.dataset.key; UI.modalCode = el.dataset.code || null;
+    // Previous / next go through the cards of the page it was opened from, in the order shown.
+    UI.modalSeq = cardSequence();
+    UI.modalIdx = UI.modalSeq.findIndex(x => x.key === UI.modal && (!x.code || x.code === UI.modalCode));
+    renderModal();
+  },
+  'modal-step': el => modalStep(+el.dataset.d),
   'modal-close': () => { UI.modal = null; renderModal(); },
   'add-list-open': () => { UI.modal = ':add-list'; renderModal(); },
   'add-list': async () => {
@@ -2126,6 +2164,10 @@ document.addEventListener('input', e => {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && UI.modal) { act['modal-close'](); return; }
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && UI.modal && UI.modal[0] !== ':' && !e.target.closest?.('input, textarea, select')) {
+    e.preventDefault();
+    return modalStep(e.key === 'ArrowLeft' ? -1 : 1);
+  }
   if (e.target.id === 'deck-add' && e.key === 'Enter') { $('#deck-add-results button')?.click(); return; }
   if (e.target.id === 'check-in' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { act.check(); return; }
   onListKey(e);

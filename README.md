@@ -115,6 +115,9 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   which printing went in): sorted by name they span the card's rows, otherwise they show muted as *3 of 10*.
   The set filter has one entry per set symbol, so Downfall and Uprising are both Ashes (cards 1–130).
   To type counts, click a row, then `↑`/`↓` move, `0`–`9` set the count, `+`/`−` adjust, `A` / `Shift+A` alt art.
+- **Card details** (click a card's name anywhere): image, text, copies per printing and decks. `←`/`→` or the
+  ‹ › buttons beside the image go to the previous / next card of the page it was opened from, in the order shown
+  (the whole filtered Collection list, not just the rows loaded so far).
 - **Lock** (padlock at the top): stops count changes, so a stray tap can't edit your collection. Decks still work.
   The lock is saved with the collection, so it's still on next time and is part of backups.
   **Add cards: From a list** adds a new starter deck, trade or booster on top of what you have.
