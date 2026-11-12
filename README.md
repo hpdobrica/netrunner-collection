@@ -117,6 +117,10 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   it's free, held by another built deck, or has to be printed. Save it as a deck, then **Build** it to
   borrow the cards. **Print list** shows what you're short of, ready to copy. **I printed them** records proxies as part of that deck, so they never count
   against your collection.
+- **Find on NetrunnerDB** (a tab on Decks): fetches decklists published on NetrunnerDB over the last 1 to 24 months,
+  keeps them in the browser, and ranks them by how many cards you'd be missing. Filter by side, faction, how many
+  missing, tournament decks, and **Legal in Standard** or **Legal in Startup**, judged from each deck's cards (card
+  pool and current ban list), not from the ban list its author picked. **Save as deck** adds one to your decks.
 - **Stats**: the shape of the collection at a glance: totals, how complete each set is (one box as sold is 100%;
   *Count reprints* also counts copies from other printings), how much is tied up in built decks, breakdowns by
   faction and type, and a shopping list. Tap a bar to go to that set, deck or filtered list. Nothing new is stored.

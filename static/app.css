@@ -381,3 +381,26 @@ ul.plain { padding-left: 18px; margin: 0; }
 @media (max-width: 400px) {
   .top nav a { padding: 8px 7px; }
 }
+
+/* ---------- find decks ---------- */
+.find { display: grid; gap: 12px; }
+.find-list { display: grid; gap: 8px; }
+.find-row {
+  display: flex; gap: 12px; align-items: flex-start; padding: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--fc); border-radius: var(--radius);
+}
+.find-row .deck-id { width: 56px; }
+.find-row .deck-info { flex: 1; }
+.find-row .deck-info a { color: var(--text); }
+.find-row details p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+@media (max-width: 640px) {
+  .find-row { flex-wrap: wrap; }
+  .find-row .deck-info { flex-basis: calc(100% - 80px); }
+  .find-row > div:last-child { width: 100%; }
+  .find-row > div:last-child button { width: 100%; }
+}
+.subtabs { justify-self: start; }
+.subtabs a { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 14px; border: 1px solid var(--line); margin-left: -1px; color: var(--muted); text-decoration: none; }
+.subtabs a:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.subtabs a:last-child { border-radius: 0 6px 6px 0; }
+.subtabs a.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }

@@ -6,7 +6,7 @@
 <!-- Only app.js runs: a script slipped into the page (say from a crafted backup) is refused. Inline styles stay
      allowed for the faction colours in style="--fc:…". Card images and data come from NetrunnerDB. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
-  img-src 'self' https://card-images.netrunnerdb.com; connect-src 'self' https://netrunnerdb.com; font-src 'self';
+  img-src 'self' https://card-images.netrunnerdb.com; connect-src 'self' https://netrunnerdb.com https://api.netrunnerdb.com; font-src 'self';
   worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Netrunner Collection</title>
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">

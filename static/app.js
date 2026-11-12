@@ -510,9 +510,10 @@ function render() {
   btn.setAttribute('aria-pressed', locked);
   $('#menu-publisher').innerHTML = publisherSeg();
   backupNote();
-  for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === UI.view || (UI.view === 'deck' && a.dataset.nav === 'decks'));
+  for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === UI.view || (['deck', 'find'].includes(UI.view) && a.dataset.nav === 'decks'));
   const app = $('#app');
-  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats };
+  FIND.scored = null; // the collection or decks may have changed
+  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats, find: viewFind };
   (views[UI.view] || viewCollection)(app);
   renderModal();
 }
@@ -948,12 +949,17 @@ function deckBadge(sum, built) {
     : `${sum.borrow ? `<span class="pill borrow">${sum.borrow} in other decks</span>` : ''} ${sum.print ? `<span class="pill print">${sum.print} to print</span>` : ''}`;
 }
 
+// Sub-tabs of the Decks page: your own decks, and decklists published on NetrunnerDB.
+const decksTabs = cur => `<nav class="seg subtabs">${[['decks', 'My decks'], ['find', 'Find on NetrunnerDB']]
+  .map(([v, l]) => `<a class="${cur === v ? 'on' : ''}" href="#${v}">${l}</a>`).join('')}</nav>`;
+
 function viewDecks(app) {
   const locks = computeLocks();
   const C = UI.check;
   const built = S.decks.filter(d => d.built);
   app.innerHTML = `
   <div class="decks">
+    ${decksTabs('decks')}
     <section class="check-panel">
       <h2>Can I build this?</h2>
       <p class="muted">Paste a deck list (plain text from NetrunnerDB, Jinteki.net, …) or a NetrunnerDB deck link.</p>
@@ -1323,6 +1329,237 @@ function collectionFrom(changes, only = null) {
   location.hash = '#collection';
 }
 
+/* ---------- find decks on NetrunnerDB ---------- */
+
+// Published decklists, fetched a day at a time from NetrunnerDB's decklists/by_date endpoint and cached in
+// IndexedDB (`nrdb` store, key `decklists`). Kept apart from the collection, so backups are unaffected.
+// Cache shape: { days: { 'YYYY-MM-DD': fetchedIso }, decks: [{ id, name, date, user, badge, votes, favs, cards }], mwl, startupCycles }
+const FIND = { cache: null, loading: false, progress: '', error: '', stop: false, scored: null };
+const FIND_RANGES = [[1, '1 month'], [3, '3 months'], [6, '6 months'], [12, '1 year'], [24, '2 years']];
+UI.find = Object.assign({ months: 3, side: '', faction: '', format: 'standard', missing: 3, borrow: true, badge: false, q: '', sort: 'missing' },
+  store.get('findFilters', {}));
+delete UI.find.mwl; // the earlier filter by the ban list the author tagged
+
+const isoDay = d => d.toISOString().slice(0, 10);
+
+// Format data, refreshed with each fetch of decklists and kept in the cache:
+// - `cache.mwl`: NetrunnerDB's ban lists with their banned cards (API v2, which has the current ones).
+// - `cache.startupCycles`: the cycles in Startup's active card pool (API v3; v2 has no card pools).
+const NRDB_V3 = 'https://api.netrunnerdb.com/api/v3/public/';
+async function fetchFormats(cache) {
+  const get = async url => {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`NetrunnerDB ${url}: HTTP ${r.status}`);
+    return (await r.json()).data;
+  };
+  const mwl = await get(NRDB_API + 'mwl');
+  cache.mwl = (Array.isArray(mwl) ? mwl : []).filter(isObj).map(m => ({
+    code: str(m.code), name: str(m.name).slice(0, 100), start: isoDate(m.date_start) ? m.date_start : '', active: m.active === true,
+    banned: ownEntries(m.cards).filter(([c, v]) => /^\d{1,10}$/.test(c) && isObj(v) && v.deck_limit === 0).map(([c]) => c) }));
+  const startup = await get(NRDB_V3 + 'formats/startup');
+  const poolId = str(startup?.attributes?.active_card_pool_id);
+  if (!/^[\w-]+$/.test(poolId)) throw new Error('NetrunnerDB: no Startup card pool');
+  const pool = await get(NRDB_V3 + 'card_pools/' + poolId);
+  const cycles = pool?.attributes?.card_cycle_ids;
+  cache.startupCycles = (Array.isArray(cycles) ? cycles : []).map(str).map(c => c.replace(/_/g, '-')); // v3 ids → v2 cycle codes
+}
+
+// Legality from a deck's cards, not the ban list its author tagged it with (many decks have none, some the wrong one).
+// Standard: no card only in rotated sets, none banned on the active Standard ban list.
+// Startup: every card has a printing in Startup's card pool, none banned on the newest Startup ban list.
+// Deck size, influence and card limits aren't checked. Cards newer than the app's card data count as legal.
+const FORMATS = {
+  standard: { name: 'Standard', mwl: c => c.mwl?.find(m => m.active && m.code.startsWith('standard')),
+    inPool: () => t => !t.rotated },
+  startup: { name: 'Startup', mwl: c => c.mwl?.filter(m => m.code.startsWith('startup')).sort((a, b) => b.start.localeCompare(a.start))[0],
+    inPool: c => { const cy = new Set(c.startupCycles || []); return t => t.printings.some(p => cy.has(p.pack.cycle_code)); } },
+};
+function formatRules() {
+  return Object.entries(FORMATS).map(([id, f]) => {
+    const banned = new Set((f.mwl(FIND.cache)?.banned || []).map(c => DB.byCode.get(c)?.key).filter(Boolean));
+    const inPool = f.inPool(FIND.cache);
+    return [id, t => inPool(t) && !banned.has(t.key)];
+  });
+}
+function legalIn(cards, rules) {
+  const titles = Object.keys(cards).map(c => DB.titles.get(DB.byCode.get(c).key));
+  return Object.fromEntries(rules.map(([id, ok]) => [id, titles.every(ok)]));
+}
+const haveFormats = c => c.mwl?.every(m => m.banned) && c.startupCycles;
+
+// NetrunnerDB data is not trusted: only whole-number ids and counts, plain card codes, dates and text are kept,
+// so everything can go into the page (text is escaped where it is shown).
+function cleanDecklist(d) {
+  if (!isObj(d) || !Number.isSafeInteger(d.id) || d.id <= 0 || !isoDate(d.date_creation)) return null;
+  const cards = {};
+  for (const [code, q] of ownEntries(d.cards)) if (/^\d{1,10}$/.test(code) && count(q)) cards[code] = count(q);
+  return { id: d.id, name: str(d.name).slice(0, 200), date: new Date(d.date_creation).toISOString().slice(0, 10), user: str(d.user_name).slice(0, 100),
+    badge: d.tournament_badge === true, votes: count(d.votes_count), favs: count(d.favorites_count), cards };
+}
+
+async function loadFindCache() {
+  if (!FIND.cache) {
+    const c = await idb.get('nrdb', 'decklists');
+    FIND.cache = isObj(c) && isObj(c.days) && Array.isArray(c.decks) ? c : { days: {}, decks: [] };
+  }
+  // Caches from before format data was kept get it now, without a new fetch of decklists.
+  if (FIND.cache.decks.length && !haveFormats(FIND.cache) && navigator.onLine !== false) {
+    await fetchFormats(FIND.cache).then(() => idb.put('nrdb', 'decklists', FIND.cache)).catch(e => console.warn(e));
+  }
+  return FIND.cache;
+}
+
+// Days to fetch: never fetched, or fetched before the day was two days old (new decks and votes may have come since).
+function daysToFetch(cache, months) {
+  const out = [], now = new Date();
+  const start = new Date(now); start.setUTCMonth(start.getUTCMonth() - months);
+  for (let d = new Date(now); d >= start; d.setUTCDate(d.getUTCDate() - 1)) {
+    const day = isoDay(d), got = cache.days[day];
+    if (!got || Date.parse(got) - Date.parse(day) < 2 * 864e5) out.push(day);
+  }
+  return out;
+}
+
+async function fetchDecklists() {
+  if (FIND.loading) return;
+  const cache = await loadFindCache();
+  const days = daysToFetch(cache, UI.find.months);
+  if (!days.length) { toast('Decklists are up to date.'); return; }
+  Object.assign(FIND, { loading: true, stop: false, error: '', progress: `0 of ${days.length} days` });
+  renderFind();
+  const byId = new Map(cache.decks.map(d => [d.id, d]));
+  await fetchFormats(cache).catch(e => console.warn(e));
+  let done = 0, sinceSave = 0;
+  const persist = async () => { cache.decks = [...byId.values()]; FIND.scored = null; await idb.put('nrdb', 'decklists', cache); };
+  const queue = [...days];
+  const worker = async () => {
+    while (queue.length && !FIND.stop) {
+      const day = queue.shift();
+      let r;
+      try { r = await fetch(`${NRDB_API}decklists/by_date/${day}`); }
+      catch { throw new Error(offlineMsg('Could not reach NetrunnerDB.')); }
+      if (r.status === 429) throw new Error('NetrunnerDB asked us to slow down. Try again in a few minutes; what was fetched is kept.');
+      if (!r.ok) throw new Error(`NetrunnerDB decklists for ${day}: HTTP ${r.status}`);
+      const j = await r.json();
+      for (const d of Array.isArray(j.data) ? j.data : []) {
+        const deck = cleanDecklist(d);
+        if (deck) byId.set(deck.id, deck);
+      }
+      cache.days[day] = new Date().toISOString();
+      done++; sinceSave++;
+      FIND.progress = `${done} of ${days.length} days · ${plural(byId.size, 'decklist')}`;
+      const p = $('#find-progress');
+      if (p) p.textContent = FIND.progress;
+      if (sinceSave >= 30) { sinceSave = 0; await persist(); }
+    }
+  };
+  try { await Promise.all([worker(), worker(), worker(), worker()]); }
+  catch (e) { FIND.stop = true; FIND.error = e.message; }
+  await persist();
+  FIND.loading = false;
+  FIND.progress = '';
+  renderFind();
+}
+
+// Scores every cached decklist against the collection. Recomputed when the collection or cache changes.
+function scoreDecklists() {
+  const locks = computeLocks(), rules = formatRules();
+  return FIND.cache.decks.map(d => {
+    const cards = {};
+    let unknown = 0;
+    for (const [code, q] of Object.entries(d.cards)) if (DB.byCode.has(code)) cards[code] = q; else unknown += q;
+    const deck = { cards, proxies: {} };
+    const { sum } = planDeck(deck, locks);
+    const id = deckIdentity(deck);
+    return { d, cards, sum, id, unknown, legal: legalIn(cards, rules), side: id?.side || deckSide(deck), search: norm(d.name + ' ' + (id?.title || '') + ' ' + d.user) };
+  });
+}
+
+function findResults() {
+  const f = UI.find;
+  if (!FIND.scored) FIND.scored = scoreDecklists();
+  const cutoff = (() => { const d = new Date(); d.setUTCMonth(d.getUTCMonth() - f.months); return isoDay(d); })();
+  const q = norm(f.q);
+  const missing = r => r.sum.print + r.unknown + (f.borrow ? 0 : r.sum.borrow);
+  const list = FIND.scored.filter(r => r.d.date >= cutoff && (!f.side || r.side === f.side) && (!f.faction || r.id?.faction === f.faction)
+    && (!f.format || r.legal[f.format]) && (!f.badge || r.d.badge) && (f.missing === '' || missing(r) <= +f.missing) && (!q || r.search.includes(q)));
+  const sorts = {
+    missing: (a, b) => missing(a) - missing(b) || a.sum.borrow - b.sum.borrow || b.d.votes - a.d.votes,
+    votes: (a, b) => b.d.votes - a.d.votes,
+    date: (a, b) => b.d.date.localeCompare(a.d.date),
+  };
+  return list.sort(sorts[f.sort] || sorts.missing);
+}
+
+function viewFind(app) {
+  app.innerHTML = '<div class="find" id="find"><p class="loading">Loading cached decklists…</p></div>';
+  loadFindCache().then(renderFind);
+}
+
+function renderFind() {
+  const box = $('#find');
+  if (!box || !FIND.cache) return;
+  const f = UI.find, cache = FIND.cache;
+  const factions = f.side === 'corp' ? CORP_FACTIONS : f.side === 'runner' ? RUNNER_FACTIONS : [...RUNNER_FACTIONS, ...CORP_FACTIONS];
+  const stale = daysToFetch(cache, f.months).length;
+  box.innerHTML = `
+    ${decksTabs('find')}
+    <section class="check-panel">
+      <h2>Find decks I can build</h2>
+      <p class="muted">Checks decklists published on NetrunnerDB against your free cards.
+        ${plural(cache.decks.length, 'decklist')} cached${stale ? ` · ${plural(stale, 'day')} to fetch or refresh` : ''}.</p>
+      <div class="row">
+        <select data-find="months" aria-label="Published within">${FIND_RANGES.map(([v, l]) => `<option value="${v}" ${+f.months === v ? 'selected' : ''}>Last ${l}</option>`).join('')}</select>
+        ${FIND.loading ? `<button data-act="find-stop">Stop</button> <span class="muted" id="find-progress">${esc(FIND.progress)}</span>`
+          : `<button class="primary" data-act="find-fetch" ${stale ? '' : 'disabled'}>${cache.decks.length ? 'Fetch new decklists' : 'Fetch decklists'}</button>`}
+      </div>
+      ${FIND.error ? `<p class="error">${esc(FIND.error)}</p>` : ''}
+    </section>
+    <div class="toolbar">
+      <input type="search" id="find-q" placeholder="Search deck, identity or author…" value="${esc(f.q)}">
+      <span class="seg">${[['', 'All'], ['runner', 'Runner'], ['corp', 'Corp']].map(([v, l]) => `<button class="${f.side === v ? 'on' : ''}" data-act="find-side" data-v="${v}">${l}</button>`).join('')}</span>
+      <select data-find="faction"><option value="">Any faction</option>${factions.map(x => `<option value="${x}" ${f.faction === x ? 'selected' : ''}>${fname(x)}</option>`).join('')}</select>
+      <select data-find="format" aria-label="Format">${Object.entries(FORMATS).map(([id, fm]) => { const m = fm.mwl(cache);
+        return `<option value="${id}" ${f.format === id ? 'selected' : ''}>Legal in ${fm.name}${m ? ` (${esc(m.name.replace(/\s*\(.*\)$/, ''))})` : ''}</option>`; }).join('')}
+        <option value="" ${!f.format ? 'selected' : ''}>Any format</option></select>
+      <select data-find="missing">${[['0', 'Buildable now'], ['1', 'Missing ≤ 1'], ['3', 'Missing ≤ 3'], ['5', 'Missing ≤ 5'], ['10', 'Missing ≤ 10'], ['', 'Any']]
+        .map(([v, l]) => `<option value="${v}" ${String(f.missing) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <select data-find="sort" aria-label="Sort">${[['missing', 'Fewest missing'], ['votes', 'Most votes'], ['date', 'Newest']].map(([v, l]) => `<option value="${v}" ${f.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <label class="check"><input type="checkbox" data-find="borrow" ${f.borrow ? 'checked' : ''}> Cards in built decks count as owned</label>
+      <label class="check"><input type="checkbox" data-find="badge" ${f.badge ? 'checked' : ''}> Tournament decks only</label>
+    </div>
+    <div id="find-results"></div>`;
+  renderFindResults();
+}
+
+function renderFindResults() {
+  const out = $('#find-results');
+  if (!out) return;
+  if (!FIND.cache.decks.length) { out.innerHTML = '<p class="empty">No decklists cached yet. Pick a range and fetch them.</p>'; return; }
+  const list = findResults();
+  const shown = list.slice(0, 100);
+  out.innerHTML = `<p class="muted">${plural(list.length, 'decklist')} match${list.length > 100 ? ', showing the first 100' : ''}.</p>` +
+    (shown.length ? `<div class="find-list">${shown.map(findRow).join('')}</div>` : '<p class="empty">No decklists match these filters.</p>');
+}
+
+function findRow(r) {
+  const { d, sum, id } = r;
+  const short = [...sum.printList.map(p => `${p.n}× ${esc(p.t.title)}`), r.unknown ? `${r.unknown} unknown to this app's card data` : ''].filter(Boolean);
+  const pills = sum.status === 'ok' && !r.unknown ? '<span class="pill ok">Buildable</span>'
+    : `${sum.borrow ? `<span class="pill borrow">${sum.borrow} in your decks</span>` : ''} ${sum.print + r.unknown ? `<span class="pill print">${sum.print + r.unknown} missing</span>` : ''}`;
+  return `<div class="find-row" style="--fc:${id ? fcolor(id.faction) : '#888'}">
+    <div class="deck-id">${id ? cardImg(id.newest.code, id.title, 'small') : '<span class="ph">No identity</span>'}</div>
+    <div class="deck-info">
+      <b><a href="https://netrunnerdb.com/en/decklist/${d.id}" target="_blank" rel="noopener">${esc(d.name)}</a></b>
+      <span class="muted">${id ? esc(id.title) : ''}</span>
+      <span class="muted">${esc(d.user)} · ${d.date} · ♥ ${d.votes} · ★ ${d.favs}${d.badge ? ' · 🏆' : ''}</span>
+      <span>${pills}</span>
+      ${short.length ? `<details class="unknown"><summary>Missing cards</summary><p>${short.join(', ')}</p></details>` : ''}
+    </div>
+    <div><button data-act="find-save" data-id="${d.id}">Save as deck</button></div>
+  </div>`;
+}
+
 /* ---------- card details modal ---------- */
 
 const SYMBOLS = { credit: '¢', click: '⏱', 'recurring-credit': '↺¢', subroutine: '↳', trash: '🗑', mu: 'MU', link: '⛓', interrupt: '⚡' };
@@ -1541,6 +1778,14 @@ const act = {
     UI.check = { text: '', result: null, error: '' };
     location.hash = '#deck/' + deck.id;
   },
+  'find-fetch': () => fetchDecklists(),
+  'find-stop': () => { FIND.stop = true; },
+  'find-side': el => { UI.find.side = el.dataset.v; UI.find.faction = ''; store.set('findFilters', UI.find); renderFind(); },
+  'find-save': el => {
+    const r = FIND.scored?.find(x => x.d.id === +el.dataset.id);
+    if (!r) return;
+    location.hash = '#deck/' + newDeck(r.d.name, r.cards, `https://netrunnerdb.com/en/decklist/${r.d.id}`).id;
+  },
   'deck-new': () => { location.hash = '#deck/' + newDeck('New deck', {}).id; },
   'deck-build': () => {
     const deck = currentDeck(), { sum } = planDeck(deck);
@@ -1750,6 +1995,11 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.type === 'checkbox' && el.dataset.act) return act[el.dataset.act](el);
+  if (el.dataset.find) {
+    UI.find[el.dataset.find] = el.type === 'checkbox' ? el.checked : el.value;
+    store.set('findFilters', UI.find);
+    if (el.dataset.find === 'months') renderFind(); else renderFindResults();
+  }
   if (el.dataset.filter) {
     UI.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
     saveFilters();
@@ -1777,6 +2027,10 @@ document.addEventListener('input', e => {
   }
   if (el.id === 'deck-add') $('#deck-add-results').innerHTML = addCardResults(el.value, currentDeck());
   if (el.id === 'check-in') UI.check.text = el.value;
+  if (el.id === 'find-q') {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { UI.find.q = el.value; store.set('findFilters', UI.find); renderFindResults(); }, 150);
+  }
   if (el.id === 'w-decks') { UI.welcome.decks = el.value; $('#w-summary').textContent = welcomeSummary(); }
 });
 
