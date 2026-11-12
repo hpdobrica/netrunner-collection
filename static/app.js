@@ -274,15 +274,20 @@ document.addEventListener('visibilitychange', async () => {
 window.addEventListener('beforeunload', e => { if (dirty) { flush(); e.preventDefault(); } });
 channel?.addEventListener('message', async e => {
   if (!S) return;
-  if (e.data.type === 'state') reloadState();
+  // With a change still waiting to be saved, save it now: the save sees the other tab's version, reloads it and
+  // says that the change here was not saved, instead of dropping it silently.
+  if (e.data.type === 'state') { if (dirty) flush(); else reloadState(); }
   if (e.data.type === 'nrdb') { loadDB(await idb.get('nrdb', 'data')); render(); }
 });
 
 const own = code => S.owned[code] || { n: 0, custom: 0 };
 
+// A whole number from 0 to 99 999, the range migrate() keeps. (n | 0 would wrap a huge count round to a negative.)
+const clampCount = v => Math.min(99999, Math.max(0, Math.floor(v) || 0));
+
 function setOwn(code, n, custom) {
-  n = Math.max(0, n | 0);
-  const c = Math.min(Math.max(0, (custom ?? own(code).custom) | 0), n);
+  n = clampCount(n);
+  const c = Math.min(clampCount(custom ?? own(code).custom), n);
   if (!n) delete S.owned[code];
   else S.owned[code] = { n, custom: c };
   save();
@@ -433,7 +438,7 @@ function parseDeckText(text) {
     else if ((m = line.match(/^(.+?)\s+[x×]\s*(\d+)$/i))) { qty = +m[2]; line = m[1]; counted = true; }
     const t = matchTitle(line);
     if (t) {
-      cards[t.newest.code] = (cards[t.newest.code] || 0) + qty;
+      cards[t.newest.code] = clampCount((cards[t.newest.code] || 0) + qty);
     } else if (!counted && !name && !Object.keys(cards).length && !isHeader(line)) {
       name = line;
     } else if (counted || !isHeader(line)) {
@@ -510,7 +515,9 @@ function render() {
   btn.setAttribute('aria-pressed', locked);
   $('#menu-publisher').innerHTML = publisherSeg();
   backupNote();
-  for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === UI.view || (['deck', 'find'].includes(UI.view) && a.dataset.nav === 'decks'));
+  // Pages opened from another one light up its tab: a deck and Find under Decks, Add by set under Collection.
+  const parent = { deck: 'decks', find: 'decks', sets: 'collection' }[UI.view] || UI.view;
+  for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === parent);
   const app = $('#app');
   FIND.scored = null; // the collection or decks may have changed
   const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats, find: viewFind };
@@ -603,7 +610,8 @@ async function finishWelcome() {
   W.decks = $('#w-decks').value;
   for (const [code, k] of Object.entries(W.complete)) {
     if (!k) continue;
-    for (const c of DB.packByCode.get(code).cards) setOwn(c.code, (c.quantity || 1) * k);
+    // At least k boxes' worth of each card; copies beyond that are kept (setup can be run again).
+    for (const c of DB.packByCode.get(code).cards) setOwn(c.code, Math.max(own(c.code).n, (c.quantity || 1) * k));
     S.packStatus[code] = 'done';
   }
   for (const [code, on] of Object.entries(W.partial)) if (on && S.packStatus[code] !== 'done') S.packStatus[code] = 'partial';
@@ -741,7 +749,10 @@ function viewCollection(app) {
   </div>
   ${lockNote}
   ${UI.only ? `<p class="only-note">Showing only: ${esc(UI.only.label)} <button data-act="only-clear">Show all cards</button></p>` : ''}
-  <div class="stats-row"><div class="stats" id="stats"></div><button data-act="add-list-open">+ Add cards from a list</button></div>
+  <div class="stats-row"><div class="stats" id="stats"></div>
+    <span class="add-cards"><span class="muted">Add cards:</span>
+      <button data-act="sets-open" title="${f.set ? `Go through ${esc(DB.cycles.get(f.set)?.name || 'this set')} card by card` : 'Go through a product card by card'}">By set</button>
+      <button data-act="add-list-open" title="Paste a list or NetrunnerDB deck links">From a list</button></span></div>
   <div id="results"></div>`;
   renderResults();
 }
@@ -799,6 +810,7 @@ function viewSets(app) {
   <div class="sets">
     <aside class="sets-side" id="sets-side">${setsSidebar(pack)}</aside>
     <section class="sets-main">
+      <a href="#collection" class="back">← Collection</a>
       <div class="pack-head">
         <select class="pack-jump" id="pack-jump" aria-label="Product">${groupByCycle(visiblePacks()).map(([cy, ps]) =>
           `<optgroup label="${esc(cy?.name || 'Other')}">${ps.map(p => `<option value="${p.code}" ${p === pack ? 'selected' : ''}>${packOption(p)}</option>`).join('')}</optgroup>`).join('')}
@@ -921,7 +933,11 @@ function onSetsKey(e) {
   else if (k === 'ArrowLeft') return e.preventDefault(), setFocus(UI.wfocus - 1);
   else if (k === 'ArrowDown') return e.preventDefault(), setFocus(UI.wfocus + cols);
   else if (k === 'ArrowUp') return e.preventDefault(), setFocus(UI.wfocus - cols);
-  else if (k === 'Enter') return e.preventDefault(), act.packDone();
+  else if (k === 'Enter') {
+    // Enter on a focused control outside the grid (Clear, the menu, a link) presses it, as usual.
+    if (e.target.closest('button, a, summary') && !e.target.closest('#pgrid')) return;
+    return e.preventDefault(), act.packDone();
+  }
   else return;
   e.preventDefault();
   refresh(DB.byCode.get(code).key);
@@ -1432,7 +1448,8 @@ async function fetchDecklists() {
   let done = 0, sinceSave = 0;
   const persist = async () => { cache.decks = [...byId.values()]; FIND.scored = null; await idb.put('nrdb', 'decklists', cache); };
   const queue = [...days];
-  const worker = async () => {
+  const worker = async () => { try { await fetchDays(); } catch (e) { FIND.stop = true; throw e; } };
+  const fetchDays = async () => {
     while (queue.length && !FIND.stop) {
       const day = queue.shift();
       let r;
@@ -1453,8 +1470,10 @@ async function fetchDecklists() {
       if (sinceSave >= 30) { sinceSave = 0; await persist(); }
     }
   };
-  try { await Promise.all([worker(), worker(), worker(), worker()]); }
-  catch (e) { FIND.stop = true; FIND.error = e.message; }
+  // Wait for every worker before saving: one that is still fetching when another fails would otherwise mark its
+  // day as fetched without its decklists ever being saved, and that day would not be fetched again.
+  const failed = (await Promise.allSettled([worker(), worker(), worker(), worker()])).find(r => r.status === 'rejected');
+  if (failed) FIND.error = failed.reason?.message || String(failed.reason);
   await persist();
   FIND.loading = false;
   FIND.progress = '';
@@ -1566,6 +1585,9 @@ const SYMBOLS = { credit: '¢', click: '⏱', 'recurring-credit': '↺¢', subro
 // Card text is HTML from NetrunnerDB: escaped, then the few tags it uses are let through again (no attributes).
 const cardText = s => esc(s).replace(/&lt;(\/?)(strong|em|ul|li)&gt;/g, '<$1$2>').replace(/\[([a-z-]+)\]/g, (m, k) => SYMBOLS[k] ? `<span class="sym">${SYMBOLS[k]}</span>` : fname(k)).replace(/\n/g, '<br>');
 
+// True while Add cards from a list is adding a list (it may be waiting for NetrunnerDB).
+let addingList = false;
+
 function renderAddList(el) {
   el.hidden = false;
   el.innerHTML = `
@@ -1576,7 +1598,7 @@ function renderAddList(el) {
       <p class="muted">For a new starter deck, a trade, a booster… Paste a list ("3x Hedge Fund") or NetrunnerDB deck links.
         The counts are added to what you already have.</p>
       <textarea id="add-list-in" rows="8" placeholder="3x Hedge Fund&#10;2x Ice Wall"></textarea>
-      <div class="row"><button class="primary" data-act="add-list">Add to collection</button></div>
+      <div class="row"><button class="primary" data-act="add-list" ${addingList ? 'disabled' : ''}>Add to collection</button></div>
       <div id="add-list-out"></div>
     </div>
   </div>`;
@@ -1661,22 +1683,35 @@ const act = {
   'modal-close': () => { UI.modal = null; renderModal(); },
   'add-list-open': () => { UI.modal = ':add-list'; renderModal(); },
   'add-list': async () => {
+    // Deck links take a while to fetch; a second tap meanwhile (even after closing and reopening this sheet)
+    // would add every card again.
+    if (addingList) return;
+    addingList = true;
+    $('[data-act="add-list"]').disabled = true;
+    const input = $('#add-list-in');
     let added = 0;
     const unknown = [], failed = [];
-    for (const chunk of splitDeckInputs($('#add-list-in').value)) {
-      try {
-        const d = await parseDeckInput(chunk);
-        for (const [code, q] of Object.entries(d.cards)) { setOwn(code, own(code).n + q); added += q; }
-        unknown.push(...d.unknown);
-      } catch (e) { failed.push(e.message); }
-    }
-    UI.modal = null;
-    renderModal();
+    try {
+      for (const chunk of splitDeckInputs(input.value)) {
+        try {
+          const d = await parseDeckInput(chunk);
+          for (const [code, q] of Object.entries(d.cards)) { setOwn(code, own(code).n + q); added += q; }
+          unknown.push(...d.unknown);
+        } catch (e) { failed.push(e.message); }
+      }
+    } finally { addingList = false; }
+    // Closed and opened again meanwhile: leave the new sheet open, with what was typed in it.
+    const reopened = UI.modal === ':add-list' && $('#add-list-in') !== input;
+    const draft = reopened ? $('#add-list-in').value : '';
+    if (!reopened) UI.modal = null;
     render();
+    if (reopened) $('#add-list-in').value = draft;
     toast(`Added ${plural(added, 'card')} to your collection.` + (unknown.length ? ` ${plural(unknown.length, 'line')} not recognised: ${unknown.slice(0, 3).join(', ')}${unknown.length > 3 ? '…' : ''}` : ''));
     if (failed.length) alert('Some deck links could not be read:\n' + failed.join('\n'));
   },
   'modal-close-nav': () => { UI.modal = null; renderModal(); },
+  // On "Could not start", whether it failed before or after the collection loaded.
+  'retry': () => location.reload(),
   'modal-show': el => { UI.modalCode = el.dataset.code; renderModal(); },
   'title-n': el => { adjustTitle(el.dataset.key, +el.dataset.d); refresh(el.dataset.key); },
   'print-n': el => { const c = el.dataset.code; setOwn(c, own(c).n + +el.dataset.d); refresh(DB.byCode.get(c).key); },
@@ -1708,6 +1743,11 @@ const act = {
     toast(S.locked ? 'Collection locked. Counts can\'t be changed until you unlock it.' : 'Collection unlocked.');
   },
 
+  // From Collection: the filtered set's first product if a set is picked, else the next product to go through.
+  'sets-open': () => {
+    const p = UI.filters.set && visiblePacks().find(x => x.cycle_code === UI.filters.set);
+    location.hash = p ? '#sets/' + p.code : '#sets';
+  },
   // data-v: the product to show only its missing cards of; empty shows every card again.
   'sets-short': el => {
     const code = el.dataset.v;
@@ -1748,7 +1788,12 @@ const act = {
     el.closest('.w-pack').classList.toggle('some', el.checked);
     $('#w-summary').textContent = welcomeSummary();
   },
-  'w-finish': () => finishWelcome(),
+  'w-finish': async el => {
+    // Deck links take a while to fetch; a second tap meanwhile would add their cards again.
+    if (el.disabled) return;
+    el.disabled = true;
+    try { await finishWelcome(); } finally { el.disabled = false; }
+  },
   'w-skip': () => { S.onboarded = true; save(false);location.hash = '#collection'; },
   'publisher': el => {
     S.publisher = el.dataset.v;
@@ -1976,6 +2021,8 @@ function saveFilters() { store.set('filters', UI.filters); }
 
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
+  // Until the collection has loaded (or when starting failed) only Try again works; the menu's actions need it.
+  if (!S) { if (el?.dataset.act === 'retry') act.retry(); return; }
   const ptile = e.target.closest('.ptile');
   if (ptile) setFocus(+ptile.dataset.i, false);
   for (const d of $$('details.menu[open], details.dd[open]')) if (!d.contains(e.target) || el?.dataset.act === 'f-set') d.open = false;
@@ -2114,6 +2161,6 @@ window.addEventListener('appinstalled', () => checkStorage());
         .catch(e => console.warn('Background card data refresh failed:', e));
     }
   } catch (e) {
-    $('#app').innerHTML = `<p class="error">Could not start: ${esc(e.message)}</p>`;
+    $('#app').innerHTML = `<p class="error">Could not start: ${esc(e.message)}</p><p><button class="primary" data-act="retry">Try again</button></p>`;
   }
 })();

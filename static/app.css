@@ -136,6 +136,7 @@ body.locked .ptile .seg.count, body.locked .ptile .altrow, body.locked .pack-act
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .toolbar input[type="search"] { flex: 1 1 240px; }
 .stats-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 12px; }
+.add-cards { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .stats { color: var(--muted); }
 .modal-box.narrow { width: min(560px, 100%); }
 .stats b { color: var(--text); }

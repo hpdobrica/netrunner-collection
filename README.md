@@ -102,7 +102,7 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   Copies you own of a reprint count no matter which printing they are.
 - **Setup**: tick the products you own complete (×1, ×2…) and the ones you only have part of. You can also
   paste starter/printed deck lists. Then you're walked through each partial product.
-- **Add by set**: a grid per product in release order. Click or use the keyboard: arrows, `0`–`9`
+- **Add by set** (*Add cards: By set* on Collection; with a set filter picked it opens that set): a grid per product in release order. Click or use the keyboard: arrows, `0`–`9`
   for the count, `A` / `Shift+A` for alt art, `Enter` for the next product. Each product shows your copies against
   one complete box, and its dot in the side list is empty, half or green for none, some or a complete box.
   *N missing* shows only the cards you're short of.
@@ -112,7 +112,7 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   **Sort by set number** lists cards by set and then card number, the way they sit in a binder.
 - **Lock** (padlock at the top): stops count changes, so a stray tap can't edit your collection. Decks still work.
   The lock is saved with the collection, so it's still on next time and is part of backups.
-  **Add cards from a list** adds a new starter deck, trade or booster on top of what you have.
+  **Add cards: From a list** adds a new starter deck, trade or booster on top of what you have.
 - **Decks**: paste a list or a NetrunnerDB link into *Can I build this?* For each card it shows whether
   it's free, held by another built deck, or has to be printed. Save it as a deck, then **Build** it to
   borrow the cards. **Print list** shows what you're short of, ready to copy. **I printed them** records proxies as part of that deck, so they never count
