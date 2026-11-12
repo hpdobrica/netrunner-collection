@@ -491,7 +491,8 @@ function route() {
   UI.view = view || (S.onboarded ? 'collection' : 'welcome');
   // A link with a broken %-escape (e.g. #deck/%E0) would otherwise stop the app; its argument just isn't found.
   try { UI.arg = decodeURIComponent(rest.join('/')); } catch { UI.arg = ''; }
-  if (UI.view !== 'collection') UI.only = null;
+  // Leaving the Collection list drops its "showing only" list and the row picked for typing counts.
+  if (UI.view !== 'collection') { UI.only = null; UI.lfocus = null; }
   // Setup is for the first run only; afterwards products are added on Add by set.
   if (UI.view === 'welcome' && S.onboarded) { location.replace('#sets'); return; }
   render();
@@ -698,15 +699,15 @@ function filteredRows(locks) {
   // Set order follows how cards sit in a binder: product release order, then card number.
   // Booster packs number their own cards from 1, so they go after the set's main run.
   const setKey = p => [p.pack.cycle?.order ?? 9998, /booster/i.test(p.pack.name), p.pack.order, p.position];
-  const dir = f.dir === 'desc' ? -1 : 1;
+  const ls = listSort(), dir = ls.dir === 'desc' ? -1 : 1;
   // Within a card, newest printing first.
   const byName = (a, b) => a.t.title.localeCompare(b.t.title) || b.p.pack.order - a.p.pack.order;
-  if (f.sort === 'set') {
+  if (ls.sort === 'set') {
     const keys = new Map(rows.map(r => [r, setKey(r.p)]));
     rows.sort((a, b) => { const x = keys.get(a), y = keys.get(b); return dir * (x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3]); });
-  } else if (SORT_VALUE[f.sort]) {
+  } else if (SORT_VALUE[ls.sort]) {
     // Ties (and blank cells) keep A–Z order whichever way the column is sorted.
-    const vals = new Map(rows.map(r => [r, SORT_VALUE[f.sort](r, locks)]));
+    const vals = new Map(rows.map(r => [r, SORT_VALUE[ls.sort](r, locks)]));
     const cmp = (x, y) => typeof x === 'string' ? x.localeCompare(y) : x - y;
     rows.sort((a, b) => dir * cmp(vals.get(a), vals.get(b)) || byName(a, b));
   } else {
@@ -717,8 +718,10 @@ function filteredRows(locks) {
   return rows;
 }
 
+// The list's order: a product's cards (UI.only.sort) in their own order, else your saved sort.
+const listSort = () => UI.only?.sort ? { sort: UI.only.sort, dir: 'asc' } : UI.filters;
 // Sorted by name, a card's printings sit together and share one In decks / Free cell.
-const groupedSort = () => !SORT_VALUE[UI.filters.sort] && UI.filters.sort !== 'set';
+const groupedSort = () => !SORT_VALUE[listSort().sort] && listSort().sort !== 'set';
 
 // Collection list columns: [sort key, header].
 const SORT_COLS = [['set', 'Set'], ['name', 'Card'], ['type', 'Type'], ['faction', 'Faction'], ['owned', 'Owned'], ['alt', 'Alt art'], ['used', 'In decks'], ['free', 'Free']];
@@ -733,7 +736,7 @@ const SORT_VALUE = {
 };
 
 function listHead() {
-  const f = UI.filters;
+  const f = listSort();
   return `<thead><tr>${SORT_COLS.map(([k, l]) => {
     const on = f.sort === k || (k === 'name' && groupedSort());
     const aria = on ? ` aria-sort="${f.dir === 'desc' ? 'descending' : 'ascending'}"` : '';
@@ -919,8 +922,9 @@ function removalWarnings(next) {
 }
 
 // Opens the Collection list on some printings, in card number order.
+// The list's own order (sort) leaves your saved sort as it was, for "Show all cards" and later visits.
 function collectionCards(label, codes) {
-  collectionFrom({ sort: 'set', dir: 'asc', hideRotated: false }, { label, codes: new Set(codes) });
+  collectionFrom({ hideRotated: false }, { label, codes: new Set(codes), sort: 'set' });
 }
 
 // Typing counts in the Collection list: click a row, then ↑/↓ move, 0–9 set the count, +/− adjust, A / Shift+A alt art.
@@ -1740,7 +1744,7 @@ function refresh(key) {
     el.outerHTML = printingRow(t, DB.byCode.get(el.dataset.code), locks, span);
   }
   if ($('#stats')) $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${UI.resultsCount}</span>`;
-  if (UI.view === 'deck' || UI.view === 'decks' || UI.view === 'stats') render();
+  if (['deck', 'decks', 'stats', 'proxies'].includes(UI.view)) render();
   else renderModal();
 }
 
@@ -1792,6 +1796,8 @@ const act = {
   'modal-show': el => { UI.modalCode = el.dataset.code; renderModal(); },
   'sort': el => {
     const f = UI.filters, v = el.dataset.v;
+    // A product's card list starts in its own order; a heading tapped there takes over from it.
+    if (UI.only?.sort) { Object.assign(f, listSort()); delete UI.only.sort; }
     // The same column again flips the order; a new one starts A–Z, or most first for counts.
     if (f.sort === v) f.dir = f.dir === 'desc' ? 'asc' : 'desc';
     else { f.sort = v; f.dir = SORT_NUMERIC.has(v) ? 'desc' : 'asc'; }
@@ -2131,7 +2137,7 @@ document.addEventListener('click', e => {
     return;
   }
   // A click on the backdrop (or the space around the box and its buttons) closes the pop-up.
-  if (e.target.id === 'modal' || e.target.classList?.contains('modal-wrap')) act['modal-close']();
+  if (e.target.id === 'modal' || e.target.classList?.contains('modal-wrap') || e.target.classList?.contains('mnav-gap')) act['modal-close']();
 });
 
 document.addEventListener('change', e => {
