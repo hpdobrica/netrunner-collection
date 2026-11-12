@@ -318,24 +318,6 @@ function mainPrinting(t) {
   return list[list.length - 1];
 }
 
-function adjustTitle(key, d) {
-  const t = DB.titles.get(key);
-  const p = mainPrinting(t);
-  if (d < 0 && !own(p.code).n) return;
-  setOwn(p.code, own(p.code).n + d);
-}
-
-// Alt art from the Collection list. + goes on the printing the tile shows (and, as everywhere, an alt-art copy
-// you didn't count yet counts as owned). − takes it from that printing, else from the newest one that has some.
-function adjustTitleAlt(key, d) {
-  const t = DB.titles.get(key);
-  let p = mainPrinting(t);
-  if (d < 0 && !own(p.code).custom) p = [...t.printings].reverse().find(x => own(x.code).custom);
-  if (!p) return;
-  const o = own(p.code);
-  setOwn(p.code, Math.max(o.n, o.custom + d), o.custom + d);
-}
-
 /* ---------- decks and availability ---------- */
 
 function deckEntries(deck) {
@@ -512,7 +494,7 @@ function route() {
 }
 
 // Actions that change what you own. A locked collection refuses them; decks can still be built and edited.
-const LOCKED_ACTS = new Set(['title-n', 'title-alt', 'print-n', 'set-n', 'alt', 'pack-add-box', 'pack-fill', 'add-list-open', 'add-list', 'welcome', 'w-finish', 'restore']);
+const LOCKED_ACTS = new Set(['print-n', 'set-n', 'alt', 'pack-add-box', 'pack-fill', 'add-list-open', 'add-list', 'welcome', 'w-finish', 'restore']);
 const lockNote = '<p class="lock-note">Collection is locked, so counts can\'t be changed. Use the lock at the top to unlock it.</p>';
 const LOCK_SVG = {
   true: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
@@ -677,84 +659,82 @@ function groupByCycle(packs) {
 
 /* ---------- collection ---------- */
 
-function filteredTitles(locks) {
+// The list has a row per printing: copies are kept per printing (that's where a card is filed). In decks and
+// Free stay per card name, since decks count cards by name and don't record which printing went in.
+// A card's printings shown in the list: the publisher setting hides the other publisher's, unless you own some.
+const listPrintings = t => t.printings.filter(p => pubOk(p.pack) || own(p.code).n);
+
+function filteredRows(locks) {
   const f = UI.filters, q = norm(f.q);
-  const list = DB.titleList.filter(t => {
-    if (!titleVisible(t)) return false;
-    if (f.side && t.side !== f.side) return false;
-    if (f.faction && t.faction !== f.faction) return false;
-    if (f.type && t.type !== f.type) return false;
-    if (f.set && !t.printings.some(p => p.pack.cycle_code === f.set)) return false;
-    if (f.hideRotated && t.rotated) return false;
-    if (UI.only && !UI.only.keys.has(t.key)) return false;
-    if (q && !t.search.includes(q)) return false;
-    const n = titleOwned(t.key);
-    switch (f.show) {
-      case 'owned': return n > 0;
-      case 'missing': return n === 0;
-      case 'incomplete': return n > 0 && n < t.deckLimit;
-      case 'alt': return titleCustom(t.key) > 0;
-      case 'free': return n - lockedQty(locks, t.key) > 0;
-      case 'used': return lockedQty(locks, t.key) > 0;
+  const rows = [];
+  for (const t of DB.titleList) {
+    if (!titleVisible(t)) continue;
+    if (f.side && t.side !== f.side) continue;
+    if (f.faction && t.faction !== f.faction) continue;
+    if (f.type && t.type !== f.type) continue;
+    if (f.hideRotated && t.rotated) continue;
+    if (UI.only && !UI.only.keys.has(t.key)) continue;
+    if (q && !t.search.includes(q)) continue;
+    // Filters about the card as a whole (playsets, decks) keep or drop all its printings.
+    const n = titleOwned(t.key), used = lockedQty(locks, t.key);
+    if (f.show === 'incomplete' && !(n > 0 && n < t.deckLimit)) continue;
+    if (f.show === 'free' && !(n - used > 0)) continue;
+    if (f.show === 'used' && !used) continue;
+    for (const p of listPrintings(t)) {
+      if (f.set && p.pack.cycle_code !== f.set) continue;
+      const o = own(p.code);
+      if (f.show === 'owned' && !o.n) continue;
+      if (f.show === 'missing' && o.n) continue;
+      if (f.show === 'alt' && !o.custom) continue;
+      rows.push({ t, p });
     }
-    return true;
-  });
+  }
   // Set order follows how cards sit in a binder: product release order, then card number.
   // Booster packs number their own cards from 1, so they go after the set's main run.
-  const setKey = t => { const p = sortPrinting(t); return [p.pack.cycle?.order ?? 9998, /booster/i.test(p.pack.name), p.pack.order, p.position]; };
+  const setKey = p => [p.pack.cycle?.order ?? 9998, /booster/i.test(p.pack.name), p.pack.order, p.position];
   const dir = f.dir === 'desc' ? -1 : 1;
-  const byName = (a, b) => a.title.localeCompare(b.title);
+  // Within a card, newest printing first.
+  const byName = (a, b) => a.t.title.localeCompare(b.t.title) || b.p.pack.order - a.p.pack.order;
   if (f.sort === 'set') {
-    const keys = new Map(list.map(t => [t, setKey(t)]));
-    list.sort((a, b) => { const x = keys.get(a), y = keys.get(b); return dir * (x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3]); });
+    const keys = new Map(rows.map(r => [r, setKey(r.p)]));
+    rows.sort((a, b) => { const x = keys.get(a), y = keys.get(b); return dir * (x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3]); });
   } else if (SORT_VALUE[f.sort]) {
     // Ties (and blank cells) keep A–Z order whichever way the column is sorted.
-    const vals = new Map(list.map(t => [t, SORT_VALUE[f.sort](t, locks)]));
+    const vals = new Map(rows.map(r => [r, SORT_VALUE[f.sort](r, locks)]));
     const cmp = (x, y) => typeof x === 'string' ? x.localeCompare(y) : x - y;
-    list.sort((a, b) => dir * cmp(vals.get(a), vals.get(b)) || byName(a, b));
+    rows.sort((a, b) => dir * cmp(vals.get(a), vals.get(b)) || byName(a, b));
+  } else {
+    // By name (printings of a card stay together); with a search, title matches before card-text matches.
+    const hit = r => q ? +r.t.nameKey.includes(q) : 0;
+    rows.sort((a, b) => (dir > 0 ? hit(b) - hit(a) : 0) || dir * a.t.title.localeCompare(b.t.title) || b.p.pack.order - a.p.pack.order);
   }
-  // By name: title matches before card-text matches.
-  else if (q && dir > 0) list.sort((a, b) => (b.nameKey.includes(q) - a.nameKey.includes(q)) || byName(a, b));
-  else if (dir < 0) list.reverse();
-  return list;
+  return rows;
 }
 
-// Collection list columns: [sort key, header]. Card sorts by name; its "set no." sorts as cards sit in a binder.
-const SORT_COLS = [['name', 'Card'], ['type', 'Type'], ['faction', 'Faction'], ['owned', 'Owned'], ['alt', 'Alt art'], ['used', 'In decks'], ['free', 'Free']];
+// Sorted by name, a card's printings sit together and share one In decks / Free cell.
+const groupedSort = () => !SORT_VALUE[UI.filters.sort] && UI.filters.sort !== 'set';
+
+// Collection list columns: [sort key, header].
+const SORT_COLS = [['name', 'Card'], ['set', 'Set'], ['type', 'Type'], ['faction', 'Faction'], ['owned', 'Owned'], ['alt', 'Alt art'], ['used', 'In decks'], ['free', 'Free']];
 const SORT_NUMERIC = new Set(['owned', 'alt', 'used', 'free']);
 const SORT_VALUE = {
-  type: t => TYPE_NAMES[t.type] || t.type,
-  faction: t => fname(t.faction),
-  owned: t => titleOwned(t.key),
-  alt: t => titleCustom(t.key),
-  used: (t, locks) => lockedQty(locks, t.key),
-  free: (t, locks) => Math.max(0, titleOwned(t.key) - lockedQty(locks, t.key)),
+  type: r => TYPE_NAMES[r.t.type] || r.t.type,
+  faction: r => fname(r.t.faction),
+  owned: r => own(r.p.code).n,
+  alt: r => own(r.p.code).custom,
+  used: (r, locks) => lockedQty(locks, r.t.key),
+  free: (r, locks) => Math.max(0, titleOwned(r.t.key) - lockedQty(locks, r.t.key)),
 };
-
-function sortHeader(key, label) {
-  const f = UI.filters, on = f.sort === key || (!SORT_VALUE[f.sort] && f.sort !== 'set' && key === 'name');
-  const arrow = on ? (f.dir === 'desc' ? ' ↓' : ' ↑') : '';
-  return `<button class="th-sort ${on ? 'on' : ''}" data-act="sort" data-v="${key}" title="Sort by ${label.toLowerCase()}">${label}${arrow}</button>`;
-}
 
 function listHead() {
   const f = UI.filters;
   return `<thead><tr>${SORT_COLS.map(([k, l]) => {
-    const on = f.sort === k || (k === 'name' && f.sort === 'set');
+    const on = f.sort === k || (k === 'name' && groupedSort());
     const aria = on ? ` aria-sort="${f.dir === 'desc' ? 'descending' : 'ascending'}"` : '';
-    return `<th${aria}>${sortHeader(k, l)}${k === 'name' ? ` <span class="muted">·</span> ${sortHeader('set', 'Set no.')}` : ''}</th>`;
+    const arrow = on ? (f.dir === 'desc' ? ' ↓' : ' ↑') : '';
+    const tip = k === 'set' ? 'Sort by set, in card number order' : `Sort by ${l.toLowerCase()}`;
+    return `<th${aria}><button class="th-sort ${on ? 'on' : ''}" data-act="sort" data-v="${k}" title="${tip}">${l}${arrow}</button></th>`;
   }).join('')}</tr></thead>`;
-}
-
-// The printing a title is filed under: the one in the filtered set, else the one shown on the tile.
-function sortPrinting(t) {
-  return (UI.filters.set && t.printings.find(p => p.pack.cycle_code === UI.filters.set)) || mainPrinting(t);
-}
-
-function setLabel(t) {
-  if (UI.filters.sort !== 'set') return '';
-  const p = sortPrinting(t);
-  return `<span class="setno muted" title="${esc(p.pack.name)} #${p.position}">${UI.filters.set ? '' : setIcon(p.pack.cycle_code)}${p.position}.</span> `;
 }
 
 // One entry per set symbol: a cycle, with all its products (Downfall + Uprising are both Ashes, numbered 1–130).
@@ -813,20 +793,30 @@ let resultsObserver = null;
 
 function renderResults() {
   const locks = computeLocks();
-  const list = filteredTitles(locks);
-  UI.resultsCount = list.length;
-  $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${list.length}</span>`;
+  const rows = filteredRows(locks);
+  UI.resultsCount = rows.length;
+  $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${rows.length}</span>`;
   // A list, not card images: browsing the collection downloads no images (images show in a card's details).
   const box = $('#results');
   box.innerHTML = `<table class="list">${listHead()}<tbody id="items"></tbody></table>`;
-  if (!list.length) box.innerHTML = '<p class="empty">No cards match these filters.</p>';
+  if (!rows.length) box.innerHTML = '<p class="empty">No cards match these filters.</p>';
   const items = $('#items');
+  // span: rows of the same card in a row, when grouped (the first of them carries the shared cells).
+  const grouped = groupedSort();
+  rows.forEach((r, i) => {
+    if (!grouped) r.span = null;
+    else if (rows[i - 1]?.t !== r.t) { let k = i; while (rows[k + 1]?.t === r.t) k++; r.span = k - i + 1; }
+    else r.span = 0;
+  });
   let shown = 0;
   const more = () => {
-    const chunk = list.slice(shown, shown + 150);
-    shown += chunk.length;
-    items.insertAdjacentHTML('beforeend', chunk.map(t => titleRow(t, locks)).join(''));
-    if (shown >= list.length) resultsObserver?.disconnect();
+    // A chunk ends between cards, so a shared cell never spans rows that aren't shown yet.
+    let end = Math.min(rows.length, shown + 150);
+    while (end < rows.length && rows[end].span === 0) end++;
+    const chunk = rows.slice(shown, end);
+    shown = end;
+    items.insertAdjacentHTML('beforeend', chunk.map(r => printingRow(r.t, r.p, locks, r.span)).join(''));
+    if (shown >= rows.length) resultsObserver?.disconnect();
   };
   resultsObserver?.disconnect();
   if (!items) return;
@@ -837,13 +827,24 @@ function renderResults() {
   resultsObserver.observe(sentinel);
 }
 
-function titleRow(t, locks) {
-  const n = titleOwned(t.key), alt = titleCustom(t.key), used = lockedQty(locks, t.key);
-  return `<tr data-key="${esc(t.key)}" class="${n ? '' : 'unowned'}">
-    <td><span class="dot" style="--fc:${fcolor(t.faction)}"></span>${setLabel(t)}<a href="javascript:" data-act="card" data-key="${esc(t.key)}">${esc(t.title)}</a></td>
+// span: null = not grouped (the card's totals show muted on every row), 0 = a later row of a group (no cells),
+// n = first row of a group of n (the cells span them).
+function printingRow(t, p, locks, span) {
+  const o = own(p.code), n = titleOwned(t.key), used = lockedQty(locks, t.key), free = n ? Math.max(0, n - used) : '';
+  const ps = listPrintings(t);
+  const others = ps.filter(x => x !== p).map(x => `${x.pack.name} #${x.position}`).join(', ');
+  const count = ps.length > 1 ? ` <span class="nprint" title="Also in ${esc(others)}">${ps.length} printings</span>` : '';
+  const all = `All ${plural(n, 'copy', 'copies')} of ${esc(t.title)}, every printing`;
+  const totals = span === 0 ? ''
+    : span > 1 ? `<td class="tot" rowspan="${span}">${used || ''}</td><td class="tot" rowspan="${span}">${free}</td>`
+    : span ? `<td>${used || ''}</td><td>${free}</td>`
+    : `<td class="muted" title="${all}">${used ? `${used} <small>of ${n}</small>` : ''}</td><td class="muted" title="${all}">${free}</td>`;
+  return `<tr data-key="${esc(t.key)}" data-code="${p.code}" data-span="${span ?? ''}" class="${o.n ? '' : 'unowned'}">
+    <td><span class="dot" style="--fc:${fcolor(t.faction)}"></span><a href="javascript:" data-act="card" data-key="${esc(t.key)}" data-code="${p.code}">${esc(t.title)}</a><span class="psub"><span class="setno-sm">${setIcon(p.pack.cycle_code)}${p.position}</span>${count}</span></td>
+    <td class="setno" title="${esc(p.pack.name)} #${p.position}">${setIcon(p.pack.cycle_code)}${p.position}</td>
     <td>${TYPE_NAMES[t.type] || t.type}</td><td>${fname(t.faction)}</td>
-    <td>${stepper('title-n', `data-key="${esc(t.key)}"`, n)}</td>
-    <td>${stepper('title-alt', `data-key="${esc(t.key)}"`, alt, 'small')}</td><td>${used || ''}</td><td>${n ? Math.max(0, n - used) : ''}</td>
+    <td>${stepper('print-n', `data-code="${p.code}"`, o.n)}</td>
+    <td>${stepper('alt', `data-code="${p.code}"`, o.custom, 'small')}</td>${totals}
   </tr>`;
 }
 
@@ -1749,7 +1750,10 @@ function replaceTile(el, html) {
 function refresh(key) {
   const locks = computeLocks();
   const t = DB.titles.get(key);
-  for (const el of $$(`#items tr${sel(key)}`)) el.outerHTML = titleRow(t, locks);
+  for (const el of $$(`#items tr${sel(key)}`)) {
+    const span = el.dataset.span === '' ? null : +el.dataset.span;
+    el.outerHTML = printingRow(t, DB.byCode.get(el.dataset.code), locks, span);
+  }
   if ($('#stats')) $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${UI.resultsCount}</span>`;
   for (const el of $$(`.ptile${sel(key)}`)) replaceTile(el, printTile(DB.byCode.get(el.dataset.code), +el.dataset.i));
   if (UI.view === 'sets') {
@@ -1772,7 +1776,7 @@ function refresh(key) {
 const currentDeck = () => S.decks.find(d => d.id === UI.arg);
 
 const act = {
-  'card': el => { UI.modal = el.dataset.key; UI.modalCode = null; renderModal(); },
+  'card': el => { UI.modal = el.dataset.key; UI.modalCode = el.dataset.code || null; renderModal(); },
   'modal-close': () => { UI.modal = null; renderModal(); },
   'add-list-open': () => { UI.modal = ':add-list'; renderModal(); },
   'add-list': async () => {
@@ -1806,8 +1810,6 @@ const act = {
   // On "Could not start", whether it failed before or after the collection loaded.
   'retry': () => location.reload(),
   'modal-show': el => { UI.modalCode = el.dataset.code; renderModal(); },
-  'title-n': el => { adjustTitle(el.dataset.key, +el.dataset.d); refresh(el.dataset.key); },
-  'title-alt': el => { adjustTitleAlt(el.dataset.key, +el.dataset.d); refresh(el.dataset.key); },
   'sort': el => {
     const f = UI.filters, v = el.dataset.v;
     // The same column again flips the order; a new one starts A–Z, or most first for counts.
