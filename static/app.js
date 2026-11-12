@@ -749,7 +749,7 @@ function listHead() {
 // One entry per set symbol: a cycle, with all its products (Downfall + Uprising are both Ashes, numbered 1–130).
 function setPicker() {
   const f = UI.filters, cur = DB.cycles.get(f.set);
-  const sets = groupByCycle(visiblePacks()).filter(([cy]) => cy);
+  const sets = groupByCycle(visiblePacks()).filter(([cy]) => cy && !(f.hideRotated && cy.rotated));
   return `<details class="dd" id="set-dd">
     <summary>${cur ? setIcon(cur.code) + esc(cur.name) : 'Any set'}</summary>
     <div class="dd-body">
@@ -2418,8 +2418,11 @@ document.addEventListener('change', e => {
   }
   if (el.dataset.filter) {
     UI.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
+    // Hide rotated also drops rotated sets from the set picker, so a picked rotated set is cleared.
+    const rotToggle = el.dataset.filter === 'hideRotated';
+    if (rotToggle && el.checked && DB.cycles.get(UI.filters.set)?.rotated) UI.filters.set = '';
     saveFilters();
-    renderResults();
+    if (rotToggle) render(); else renderResults();
   }
   if (el.dataset.stat) {
     UI.stats[el.dataset.stat] = el.type === 'checkbox' ? el.checked : el.value;
