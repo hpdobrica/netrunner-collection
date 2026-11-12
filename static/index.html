@@ -4,8 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Netrunner Collection</title>
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#171b23">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="app.css">
-<link rel="stylesheet" href="/api/icons.css">
+<link rel="stylesheet" href="icons/icons.css">
 </head>
 <body>
 <header class="top">
@@ -24,16 +29,21 @@
       <div id="menu-publisher" class="menu-pub"></div>
       <button data-act="welcome">Run setup again</button>
       <button data-act="refresh-db">Refresh card data from NetrunnerDB</button>
-      <button data-act="export">Export collection (JSON)</button>
-      <button data-act="import">Import collection (JSON)…</button>
+      <button data-act="backup">Download backup</button>
+      <button data-act="restore">Restore from backup…</button>
+      <div class="menu-note" id="backup-note"></div>
+      <div class="menu-note" id="storage-note"></div>
       <div class="menu-note" id="db-note"></div>
+      <div class="menu-note about">About: card data and set symbols from <a href="https://netrunnerdb.com" target="_blank" rel="noopener">NetrunnerDB</a>
+        (MIT licence, © Cédric Bertolini). The set symbols are the publishers' marks; this is an unofficial fan tool.</div>
     </div>
   </details>
 </header>
 <main id="app"><p class="loading">Loading card data from NetrunnerDB…</p></main>
 <div id="modal" class="modal" hidden></div>
 <div id="toast" class="toast" hidden></div>
-<input type="file" id="import-file" accept=".json,application/json" hidden>
+<div id="update" class="toast update" hidden>New version available <button class="primary" data-act="update-reload">Reload</button></div>
+<input type="file" id="restore-file" accept=".json,application/json" hidden>
 <script src="app.js"></script>
 </body>
 </html>

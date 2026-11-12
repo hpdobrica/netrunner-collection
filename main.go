@@ -6,8 +6,10 @@
 //	netrunner.exe -dev         serve static/ from disk instead of the embedded copy
 //	netrunner.exe -lan         also reachable from other devices on your Wi-Fi (phone, tablet)
 //
-// The collection lives in data/collection.json next to the executable (plain JSON, safe to commit).
-// Card data from NetrunnerDB is cached in data/nrdb-cache.json; the UI can refresh it.
+// The UI in static/ no longer uses the /api endpoints: it keeps the collection in the browser (IndexedDB) and
+// talks to NetrunnerDB directly, so any static server will do. The endpoints below remain for older copies of
+// the UI and are removed once the PWA is in use (see docs/pwa-spec.md):
+// /api/state reads and writes data/collection.json, and NetrunnerDB data is cached in data/nrdb-cache.json.
 package main
 
 import (

@@ -1,6 +1,6 @@
 # Spec: Netrunner Collection as an installable web app (PWA)
 
-Status: draft for review · 2026-11-11
+Status: agreed, not started · 2026-11-11
 
 ## Why
 
@@ -21,7 +21,7 @@ screen, and use it offline. Each person's collection is stored on their own devi
   - backing up is one tap
   - the app reminds you when a backup is due
 - Everything the app does today keeps working: collection, set wizard, decks, availability, printing, lock,
-  publisher switch, set icons and sort.
+  publisher switch, set icons and sort. The one exception is the collection grid view, which is dropped.
 
 ## Non-goals (for now)
 
@@ -121,8 +121,13 @@ The format is unchanged from today, with one new `meta` block:
   - "Refresh card data" in the menu forces a refresh.
 - **Deck links:** fetched directly from NetrunnerDB, with the same parsing as today.
 - **Images:**
-  - Card images load from NetrunnerDB's image server.
-  - The service worker caches images as they're viewed (cache-first), capped at about 1,500 images, oldest removed first.
+  - The Collection page is list-only: the grid view goes away, so browsing the collection loads no images.
+  - Images load only where they help you recognise a physical card:
+    - the card details sheet, one image
+    - the set wizard (Add by set), used mostly during setup and when adding a new product
+    - deck identity thumbnails
+  - Images come from NetrunnerDB's image server. The service worker caches them as they're viewed (cache-first),
+    capped at about 600 images (around 50 MB), oldest removed first.
   - Offline, images that were never seen show the existing title placeholder.
 - **Set icons:**
   - NetrunnerDB's `netrunner.woff` and the cycle-to-symbol map (`icons.css`) are generated once by a small script
@@ -130,7 +135,8 @@ The format is unchanged from today, with one new `meta` block:
   - A new cycle needs the script re-run and a redeploy. Until then the set shows without a symbol.
   - Licensing: the NetrunnerDB repository is MIT-licensed (© Cédric Bertolini). The symbols themselves are game
     publishers' marks, used here as a fan tool, as NetrunnerDB does. Credit NetrunnerDB in the About text.
-    See *Open questions*.
+    Decided to ship it. If a rights holder objects, switch to Null Signal's official visual assets
+    (CC BY-ND) or drop the icons.
 
 ## Offline and installing
 
@@ -186,7 +192,7 @@ resolved share as done and a cancelled share as not done.
 A small banner at the top, never a pop-up, appears when either is true:
 
 - there are 10 or more changes since the last backup, or
-- there are changes and the first of them is at least 7 days old.
+- there are changes and the first of them is at least 1 day old.
 
 Text: "12 changes since your last backup", with two buttons: **Back up now** and **Later**.
 
@@ -231,12 +237,12 @@ After setup finishes, show the backup prompt (see Reminders) and the persistence
 
 ## Hosting
 
-- GitHub Pages, deployed by a GitHub Actions workflow that publishes `netrunner-collection/static/`.
-- The repo `ai-home` holds other projects, so either:
-  - **(a)** a Pages workflow in this repo that publishes only that folder, or
-  - **(b)** move the app into its own repository.
-- Pages needs a public repository on the free plan. See *Open questions*.
-- No build step: the files are served as they are.
+- The app becomes its own repository, published with GitHub Pages. Until then it stays in `ai-home/netrunner-collection/`.
+- When it moves:
+  - the new repository is public, since free Pages needs that
+  - a GitHub Actions workflow publishes `static/`
+  - no build step: the files are served as they are
+- Personal data (`data/collection.json`) is not committed. It stays out of the public repository.
 
 ## Browser support
 
@@ -286,16 +292,16 @@ Plus:
    - bundled set icons
    - backup format, download and restore
    - runs from any static server
-2. **Installable and offline:** manifest, service worker, image cache, update toast, persistent storage and its status.
+2. **Installable and offline:** list-only collection, manifest, service worker, image cache, update toast,
+   persistent storage and its status.
 3. **Backup flows:** share backup, reminders, desktop automatic backup file, restore safety checks, first-run choice.
-4. **Ship:** GitHub Pages workflow, README, migrating your own data, the test pass above on a real phone.
+4. **Ship:** move to its own repository, GitHub Pages workflow, README, migrating your own data, the test pass
+   above on a real phone.
 
-## Open questions
+## Decisions (2026-11-11)
 
-1. **Hosting:** publish from this repo with a workflow, or move the app into its own repository?
-   Either way, Pages on the free plan needs a public repository.
-2. **Set icons:** OK to ship NetrunnerDB's icon font, credited, as described? The fallback is Null Signal's
-   official visual assets (CC BY-ND). I haven't checked whether those include set symbols.
-3. **Image cache size:** 1,500 images is about 130 MB. Is that fine on your phone, or should it be smaller or a setting?
-4. **Reminder thresholds:** are 10 changes or 7 days right? Since the collection is usually locked, reminders will
-   mostly follow setup and new purchases.
+1. **Hosting:** a separate app in its own public repository with GitHub Pages. It stays in this repo until then.
+2. **Set icons:** ship NetrunnerDB's icon font, credited.
+3. **Images:** drop the collection grid and keep only the list. Images appear in card details, the set wizard and
+   deck identities. Image cache of about 600.
+4. **Reminders:** 10 changes, or changes older than 1 day.

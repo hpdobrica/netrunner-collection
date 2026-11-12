@@ -78,28 +78,133 @@ function loadDB(raw) {
 
 const imgUrl = (code, size = 'medium') => DB.tpl.replace('{code}', code).replace('/large/', `/${size}/`);
 
+const NRDB_API = 'https://netrunnerdb.com/api/2.0/public/';
+const NRDB_MAX_AGE = 7 * 24 * 3600e3;
+
+// Fetches cards, cycles and packs straight from NetrunnerDB (it allows cross-origin requests) and caches them.
+async function fetchNrdb() {
+  const get = async name => {
+    let r;
+    try { r = await fetch(NRDB_API + name); } catch { throw new Error(offlineMsg('Could not reach NetrunnerDB.')); }
+    if (!r.ok) throw new Error(`NetrunnerDB ${name}: HTTP ${r.status}`);
+    return r.json();
+  };
+  const [cards, cycles, packs] = await Promise.all(['cards', 'cycles', 'packs'].map(get));
+  const raw = {
+    fetched: new Date().toISOString(), lastUpdated: cards.last_updated, imageUrlTemplate: cards.imageUrlTemplate,
+    cycles: cycles.data, packs: packs.data, cards: cards.data,
+  };
+  await idb.put('nrdb', 'data', raw);
+  channel?.postMessage({ type: 'nrdb' });
+  return raw;
+}
+
+const offlineMsg = msg => navigator.onLine === false ? 'You are offline. ' + msg : msg;
+
+/* ---------- storage (IndexedDB) ---------- */
+
+// One database: the collection in `state`, cached NetrunnerDB data in `nrdb`, and `settings` for later use.
+const idb = {
+  conn: null,
+  open() {
+    return this.conn ||= new Promise((resolve, reject) => {
+      const r = indexedDB.open('netrunner-collection', 1);
+      r.onupgradeneeded = () => { for (const s of ['state', 'nrdb', 'settings']) r.result.createObjectStore(s); };
+      r.onsuccess = () => {
+        // Let a newer version of the app upgrade the database instead of blocking it.
+        r.result.onversionchange = () => { r.result.close(); this.conn = null; };
+        resolve(r.result);
+      };
+      r.onerror = () => reject(r.error);
+      r.onblocked = () => reject(new Error('Close the app\'s other tabs and reload.'));
+    });
+  },
+  async tx(store, mode, fn) {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction(store, mode);
+      let out;
+      fn(t.objectStore(store), v => { out = v; });
+      t.oncomplete = () => resolve(out);
+      t.onerror = t.onabort = () => reject(t.error || new Error('Storage aborted'));
+    });
+  },
+  get(store, key) { return this.tx(store, 'readonly', (os, done) => { os.get(key).onsuccess = e => done(e.target.result); }); },
+  put(store, key, v) { return this.tx(store, 'readwrite', os => os.put(v, key)); },
+};
+
+// Other open tabs reload the collection after this one saves, instead of later overwriting it with older data.
+const channel = 'BroadcastChannel' in window ? new BroadcastChannel('netrunner-collection') : null;
+
 /* ---------- collection state ---------- */
 
 let S = null;
-let saveTimer = null, dirty = false;
+// base: meta.updated of the version this tab last loaded or saved. A stored version with a different one was
+// written by another tab, so this tab reloads rather than overwrite it.
+let saveTimer = null, dirty = false, counted = false, base = null, flushing = Promise.resolve();
 
-function save() {
+// Brings a stored or restored collection (version 1 or 2) up to the current format.
+function migrate(s) {
+  s = Object.assign({ owned: {}, decks: [], packStatus: {}, onboarded: false }, s);
+  s.version = 2;
+  s.meta = Object.assign({}, s.meta);
+  if (!s.onboarded && Object.keys(s.owned).length) s.onboarded = true;
+  return s;
+}
+
+// counts: the save changes the collection or decks, so it is a change a backup should cover.
+// Lock, publisher and similar settings pass false.
+function save(counts = true) {
   dirty = true;
+  if (counts) counted = true;
   setSaveStatus('Saving…');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(flush, 400);
 }
 
-async function flush() {
+// Saves run one after another, so a tab never mistakes its own previous save for another tab's.
+function flush() {
   clearTimeout(saveTimer);
+  return flushing = flushing.then(writeState);
+}
+
+async function writeState() {
+  if (!dirty) return;
+  const now = new Date().toISOString(), m = S.meta;
+  m.updated = now;
+  // meta.changed is the time of the last collection or deck change; restore compares it with the backup's date.
+  if (counted) { m.changesSinceBackup = (m.changesSinceBackup || 0) + 1; m.changed = now; m.firstUnbackedChange ||= now; }
+  dirty = counted = false;
   try {
-    const r = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(S) });
-    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
-    dirty = false;
+    const ok = await idb.tx('state', 'readwrite', (os, done) => {
+      os.get('collection').onsuccess = e => {
+        const stored = e.target.result;
+        if (stored && stored.meta?.updated !== base) return done(false);
+        os.put(S, 'collection');
+        done(true);
+      };
+    });
+    if (!ok) {
+      await reloadState();
+      toast('The collection was changed in another tab, so this tab has reloaded it. Your last change here was not saved.');
+      return;
+    }
+    base = now;
+    channel?.postMessage({ type: 'state' });
     setSaveStatus('Saved');
+    backupNote();
   } catch (e) {
+    dirty = true;
     setSaveStatus('Not saved: ' + e.message, true);
   }
+}
+
+async function reloadState() {
+  clearTimeout(saveTimer);
+  dirty = counted = false;
+  S = migrate(await idb.get('state', 'collection'));
+  base = S.meta.updated ?? null;
+  route();
 }
 
 function setSaveStatus(text, error) {
@@ -108,7 +213,21 @@ function setSaveStatus(text, error) {
   el.classList.toggle('error', !!error);
 }
 
+// Phones kill hidden tabs without warning, so save as soon as the page is hidden. When it comes back,
+// pick up anything another tab saved meanwhile (a frozen tab can miss the broadcast).
+document.addEventListener('visibilitychange', async () => {
+  if (!S) return;
+  if (document.visibilityState === 'hidden') { if (dirty) flush(); return; }
+  await flushing;
+  const stored = await idb.get('state', 'collection');
+  if (!dirty && stored && stored.meta?.updated !== base) reloadState();
+});
 window.addEventListener('beforeunload', e => { if (dirty) { flush(); e.preventDefault(); } });
+channel?.addEventListener('message', async e => {
+  if (!S) return;
+  if (e.data.type === 'state') reloadState();
+  if (e.data.type === 'nrdb') { loadDB(await idb.get('nrdb', 'data')); render(); }
+});
 
 const own = code => S.owned[code] || { n: 0, custom: 0 };
 
@@ -274,9 +393,11 @@ async function parseDeckInput(text) {
   const m = text.match(NRDB_URL);
   if (!m) return parseDeckText(text);
   const kind = m[1].toLowerCase() === 'decklist' ? 'decklist' : 'deck';
-  const r = await fetch(`/api/${kind}/${m[2]}`);
+  let r;
+  try { r = await fetch(`${NRDB_API}${kind}/${m[2]}`); }
+  catch { throw new Error(offlineMsg('Could not reach NetrunnerDB to read the deck link. Paste the list as text instead.')); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.data?.length) throw new Error(j.error || 'Deck not found on NetrunnerDB. Private decks must be shared to be readable.');
+  if (!r.ok || !j.data?.length) throw new Error('Deck not found on NetrunnerDB. Private decks must be shared to be readable.');
   const d = j.data[0];
   const cards = {}, unknown = [];
   for (const [code, q] of Object.entries(d.cards)) {
@@ -289,7 +410,7 @@ async function parseDeckInput(text) {
 
 const UI = {
   view: '', arg: '',
-  filters: Object.assign({ q: '', side: '', faction: '', type: '', set: '', show: 'all', hideRotated: false, mode: 'grid', sort: 'name' }, store.get('filters', {})),
+  filters: Object.assign({ q: '', side: '', faction: '', type: '', set: '', show: 'all', hideRotated: false, sort: 'name' }, store.get('filters', {})),
   setsFilter: store.get('setsFilter', 'all'),
   setsHideRotated: store.get('setsHideRotated', false),
   wfocus: 0,
@@ -312,7 +433,7 @@ function route() {
 }
 
 // Actions that change what you own. A locked collection refuses them; decks can still be built and edited.
-const LOCKED_ACTS = new Set(['title-n', 'print-n', 'set-n', 'alt', 'pack-fill', 'add-list-open', 'add-list', 'welcome', 'w-finish', 'import']);
+const LOCKED_ACTS = new Set(['title-n', 'print-n', 'set-n', 'alt', 'pack-fill', 'add-list-open', 'add-list', 'welcome', 'w-finish', 'restore']);
 const lockNote = '<p class="lock-note">Collection is locked, so counts can\'t be changed. Use the lock at the top to unlock it.</p>';
 const LOCK_SVG = {
   true: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
@@ -327,6 +448,7 @@ function render() {
   btn.setAttribute('aria-label', btn.title);
   btn.setAttribute('aria-pressed', locked);
   $('#menu-publisher').innerHTML = publisherSeg();
+  backupNote();
   for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === UI.view || (UI.view === 'deck' && a.dataset.nav === 'decks'));
   const app = $('#app');
   const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck };
@@ -336,8 +458,10 @@ function render() {
 
 /* ---------- shared fragments ---------- */
 
+// crossorigin: NetrunnerDB's image server allows it, and the service worker can then cache real responses
+// (an opaque no-cors response counts as several MB against the storage quota).
 function cardImg(code, title, size) {
-  return `<img loading="lazy" src="${imgUrl(code, size)}" alt=""><span class="ph">${esc(title)}</span>`;
+  return `<img loading="lazy" crossorigin="anonymous" src="${imgUrl(code, size)}" alt=""><span class="ph">${esc(title)}</span>`;
 }
 
 function stepper(act, attrs, n, extra = '') {
@@ -361,6 +485,8 @@ function viewWelcome(app) {
   <div class="welcome">
     <h1>Let's catalogue your cards</h1>
     <p class="lead">Three quick steps. Nothing here is final: every count can be changed later.</p>
+    ${isIOS && !isStandalone() ? `<p class="install-hint">On iPhone, tap Share → <b>Add to Home Screen</b> and use the app from there:
+      Safari deletes the data of sites you haven't opened for 7 days, but not of home-screen apps.</p>` : ''}
     <p>Which products should this cover? ${publisherSeg()}</p>
 
     <section class="step">
@@ -549,10 +675,6 @@ function viewCollection(app) {
       ${[['name', 'Sort by name'], ['set', 'Sort by set number']].map(([v, l]) => `<option value="${v}" ${f.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
     </select>
     <label class="check"><input type="checkbox" data-filter="hideRotated" ${f.hideRotated ? 'checked' : ''}> Hide rotated</label>
-    <span class="seg">
-      <button class="${f.mode === 'grid' ? 'on' : ''}" data-act="f-mode" data-v="grid">Grid</button>
-      <button class="${f.mode === 'list' ? 'on' : ''}" data-act="f-mode" data-v="list">List</button>
-    </span>
   </div>
   ${lockNote}
   <div class="stats-row"><div class="stats" id="stats"></div><button data-act="add-list-open">+ Add cards from a list</button></div>
@@ -567,17 +689,16 @@ function renderResults() {
   const list = filteredTitles(locks);
   UI.resultsCount = list.length;
   $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${list.length}</span>`;
+  // A list, not card images: browsing the collection downloads no images (images show in a card's details).
   const box = $('#results');
-  const grid = UI.filters.mode === 'grid';
-  box.innerHTML = grid ? '<div class="grid" id="items"></div>'
-    : '<table class="list"><thead><tr><th>Card</th><th>Type</th><th>Faction</th><th>Owned</th><th>Alt art</th><th>In decks</th><th>Free</th></tr></thead><tbody id="items"></tbody></table>';
+  box.innerHTML = '<table class="list"><thead><tr><th>Card</th><th>Type</th><th>Faction</th><th>Owned</th><th>Alt art</th><th>In decks</th><th>Free</th></tr></thead><tbody id="items"></tbody></table>';
   if (!list.length) box.innerHTML = '<p class="empty">No cards match these filters.</p>';
   const items = $('#items');
   let shown = 0;
   const more = () => {
     const chunk = list.slice(shown, shown + 150);
     shown += chunk.length;
-    items.insertAdjacentHTML('beforeend', chunk.map(t => grid ? titleTile(t, locks) : titleRow(t, locks)).join(''));
+    items.insertAdjacentHTML('beforeend', chunk.map(t => titleRow(t, locks)).join(''));
     if (shown >= list.length) resultsObserver?.disconnect();
   };
   resultsObserver?.disconnect();
@@ -587,21 +708,6 @@ function renderResults() {
   box.append(sentinel);
   resultsObserver = new IntersectionObserver(es => { if (es[0].isIntersecting) more(); }, { rootMargin: '800px' });
   resultsObserver.observe(sentinel);
-}
-
-function titleTile(t, locks) {
-  const n = titleOwned(t.key), alt = titleCustom(t.key), used = lockedQty(locks, t.key);
-  return `<div class="tile ${n ? '' : 'unowned'}" data-key="${esc(t.key)}" style="--fc:${fcolor(t.faction)}">
-    <button class="tile-img" data-act="card" data-key="${esc(t.key)}" title="${esc(t.title)}">
-      ${cardImg(mainPrinting(t).code, t.title)}
-      ${alt ? `<span class="badge alt">${alt} alt art</span>` : ''}
-      ${used ? `<span class="badge used">${used} in decks</span>` : ''}
-    </button>
-    <div class="tile-foot">
-      <span class="tile-name" title="${esc(t.title)}">${setLabel(t)}${esc(t.title)}</span>
-      ${stepper('title-n', `data-key="${esc(t.key)}"`, n)}
-    </div>
-  </div>`;
 }
 
 function titleRow(t, locks) {
@@ -947,7 +1053,6 @@ function replaceTile(el, html) {
 function refresh(key) {
   const locks = computeLocks();
   const t = DB.titles.get(key);
-  for (const el of $$(`.tile${sel(key)}`)) replaceTile(el, titleTile(t, locks));
   for (const el of $$(`#items tr${sel(key)}`)) el.outerHTML = titleRow(t, locks);
   if ($('#stats')) $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${UI.resultsCount}</span>`;
   for (const el of $$(`.ptile${sel(key)}`)) replaceTile(el, printTile(DB.byCode.get(el.dataset.code), +el.dataset.i));
@@ -1003,11 +1108,10 @@ const act = {
   'focus': el => setFocus(+el.dataset.i),
 
   'f-side': el => { UI.filters.side = el.dataset.v; UI.filters.faction = ''; UI.filters.type = ''; saveFilters(); render(); },
-  'f-mode': el => { UI.filters.mode = el.dataset.v; saveFilters(); render(); },
   'f-set': el => { UI.filters.set = el.dataset.v; saveFilters(); render(); },
   'lock': () => {
     S.locked = !S.locked;
-    save();
+    save(false);
     render();
     toast(S.locked ? 'Collection locked. Counts can\'t be changed until you unlock it.' : 'Collection unlocked.');
   },
@@ -1043,11 +1147,11 @@ const act = {
     $('#w-summary').textContent = welcomeSummary();
   },
   'w-finish': () => finishWelcome(),
-  'w-skip': () => { S.onboarded = true; save(); location.hash = '#collection'; },
+  'w-skip': () => { S.onboarded = true; save(false);location.hash = '#collection'; },
   'publisher': el => {
     S.publisher = el.dataset.v;
     if (UI.filters.set && !visiblePacks().some(p => p.cycle_code === UI.filters.set)) { UI.filters.set = ''; saveFilters(); }
-    save();
+    save(false);
     $('.menu').open = false;
     if (UI.view === 'sets' && !pubOk(DB.packByCode.get(UI.setsPack))) { location.hash = '#sets'; return; }
     render();
@@ -1121,23 +1225,90 @@ const act = {
     $('.menu').open = false;
     toast('Fetching card data from NetrunnerDB…');
     try {
-      const r = await fetch('/api/nrdb?refresh=1');
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error);
-      loadDB(j);
+      loadDB(await fetchNrdb());
       render();
       toast(`Card data updated: ${DB.byCode.size} printings.`);
     } catch (e) { alert(e.message); }
   },
-  'export': () => {
+  'backup': () => {
     $('.menu').open = false;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
-    a.download = `netrunner-collection-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
+    const now = new Date().toISOString();
+    Object.assign(S.meta, { lastBackup: now, changesSinceBackup: 0, firstUnbackedChange: null });
+    downloadBackup(backupName(now), now);
+    save(false);
+    toast('Backup downloaded.');
   },
-  'import': () => { $('.menu').open = false; $('#import-file').click(); },
+  'restore': () => { $('.menu').open = false; $('#restore-file').click(); },
+  'update-reload': async () => {
+    // Save first: the reload must not lose a change still waiting for its debounced save.
+    await flush();
+    const w = PWA.waiting;
+    if (!w || w.state === 'activated') return location.reload(); // another tab already switched
+    PWA.reloading = true;
+    w.postMessage('skip-waiting');
+  },
 };
+
+/* ---------- backup and restore ---------- */
+
+const BACKUP_APP = 'netrunner-collection';
+const backupName = (iso, suffix = '') => `netrunner-collection-${localDate(iso)}${suffix}.json`;
+// YYYY-MM-DD in local time, for file names.
+const localDate = iso => { const d = new Date(iso); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
+const niceDate = iso => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+const cardCount = c => Object.values(c.owned).reduce((a, o) => a + (o.n || 0), 0);
+
+function downloadBackup(name, exportedAt) {
+  const file = { app: BACKUP_APP, exportedAt, collection: S };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(file, null, 1)], { type: 'application/json' }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10e3);
+}
+
+function backupNote() {
+  const m = S.meta, n = m.changesSinceBackup || 0;
+  $('#backup-note').textContent = (m.lastBackup ? `Last backup ${niceDate(m.lastBackup)}` : 'Not backed up yet') +
+    (n ? ` · ${plural(n, 'change')} since` : '');
+}
+
+// Accepts a backup file, or a version 1 export / collection.json from the Go version (the bare collection).
+function readBackup(data, file) {
+  if (data?.app === BACKUP_APP && data.collection) return { c: data.collection, date: data.exportedAt };
+  if (data?.owned && data.decks) return { c: data, date: data.meta?.updated || new Date(file.lastModified).toISOString() };
+  throw new Error('That file is not a Netrunner Collection backup.');
+}
+
+async function restoreFile(file) {
+  try {
+    if (S.locked) throw new Error('The collection is locked. Unlock it before restoring a backup.');
+    const { c, date } = readBackup(JSON.parse(await file.text()), file);
+    if (!c.owned || !Array.isArray(c.decks)) throw new Error('That backup has no collection in it.');
+    const changed = S.meta.changed;
+    const newer = changed && date && changed > date;
+    const msg = [`Restore ${file.name}?`,
+      `Backup from ${date ? niceDate(date) : 'an unknown date'}: ${plural(cardCount(c), 'card')}, ${plural(c.decks.length, 'deck')}.`];
+    if (newer) msg.push(`This backup is from ${niceDate(date)}. This device has newer changes (last one ${niceDate(changed)}` +
+      `${S.meta.changesSinceBackup ? `, ${plural(S.meta.changesSinceBackup, 'change')} since your last backup` : ''}). Replace them anyway?`);
+    const hasData = Object.keys(S.owned).length || S.decks.length;
+    if (hasData) msg.push('Your current collection is downloaded first as a safety copy.');
+    if (!confirm(msg.join('\n\n'))) return;
+    await flush();
+    // The safety copy is not a backup, so it doesn't reset the change counter.
+    const now = new Date().toISOString();
+    if (hasData) downloadBackup(backupName(now, '-before-restore'), now);
+    S = migrate(c);
+    // The device now matches the backup, so nothing is waiting to be backed up.
+    Object.assign(S.meta, { changesSinceBackup: 0, firstUnbackedChange: null, lastBackup: date || now, changed: S.meta.changed || date || now });
+    save(false);
+    UI.modal = null;
+    // The page shown may be a deck the backup doesn't have.
+    if (location.hash === '#collection') route(); else location.hash = '#collection';
+    toast(`Restored ${plural(cardCount(S), 'card')} and ${plural(S.decks.length, 'deck')}.`);
+  } catch (e) { alert(e.message); }
+  $('#restore-file').value = '';
+}
 
 function newDeck(name, cards, source = '') {
   const deck = { id: uid(), name, built: false, cards: { ...cards }, proxies: {}, source, notes: '', created: new Date().toISOString() };
@@ -1198,7 +1369,8 @@ document.addEventListener('click', e => {
     if (el.tagName === 'A' && el.getAttribute('href') === 'javascript:') e.preventDefault();
     if (S.locked && LOCKED_ACTS.has(el.dataset.act)) {
       $('.menu').open = false;
-      return toast('Collection is locked. Use the lock at the top to change counts.');
+      return toast(el.dataset.act === 'restore' ? 'Collection is locked. Unlock it before restoring a backup.'
+        : 'Collection is locked. Use the lock at the top to change counts.');
     }
     act[el.dataset.act](el, e);
     return;
@@ -1218,7 +1390,7 @@ document.addEventListener('change', e => {
     currentDeck()[el.dataset.deckField] = el.value;
     save();
   }
-  if (el.id === 'import-file' && el.files[0]) importFile(el.files[0]);
+  if (el.id === 'restore-file' && el.files[0]) restoreFile(el.files[0]);
   if (el.id === 'pack-jump') location.hash = '#sets/' + el.value;
 });
 
@@ -1246,32 +1418,71 @@ document.addEventListener('error', e => { if (e.target.tagName === 'IMG') e.targ
 
 window.addEventListener('hashchange', () => { UI.modal = null; route(); });
 
-async function importFile(file) {
-  try {
-    const data = JSON.parse(await file.text());
-    if (!data.owned || !data.decks) throw new Error('That file is not a collection export.');
-    if (!confirm(`Replace your collection with ${file.name}? (${Object.keys(data.owned).length} printings, ${data.decks.length} decks)`)) return;
-    S = Object.assign({ packStatus: {}, onboarded: true }, data);
-    save();
-    route();
-  } catch (e) { alert(e.message); }
-  $('#import-file').value = '';
+/* ---------- offline, installing and updates ---------- */
+
+const PWA = { waiting: null, reloading: false, storage: '' };
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
+// The service worker (sw.js) makes the app work offline. A new version waits until the user taps Reload,
+// so the app never reloads on its own and nothing unsaved is lost.
+async function registerWorker() {
+  if (!('serviceWorker' in navigator)) return; // e.g. plain http on a LAN address: works, but not offline
+  const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
+  const offer = w => {
+    // Without a controller this is the first install, not an update.
+    if (!w || !navigator.serviceWorker.controller) return;
+    PWA.waiting = w;
+    $('#update').hidden = false;
+  };
+  offer(reg.waiting);
+  reg.addEventListener('updatefound', () => {
+    const w = reg.installing;
+    w.addEventListener('statechange', () => { if (w.state === 'installed') offer(w); });
+  });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (PWA.reloading) location.reload(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
 }
+
+// Asks the browser to keep the data even when space runs low. Chrome usually agrees for installed apps,
+// Firefox asks the user, Safari 17+ decides itself.
+async function checkStorage() {
+  const s = navigator.storage;
+  if (!s?.persist) PWA.storage = 'unsupported';
+  else PWA.storage = (await s.persisted() || await s.persist()) ? 'protected' : 'not protected';
+  storageNote();
+}
+
+function storageNote() {
+  const el = $('#storage-note');
+  if (PWA.storage === 'protected') el.innerHTML = 'Storage: <span class="storage-ok">protected ✓</span>';
+  else if (PWA.storage) el.innerHTML = `Storage: not protected. The browser may delete the collection when it runs short of space${
+    isIOS ? ' or after 7 days unused' : ''}. ${isStandalone() ? '' : `Installing the app (${isIOS ? 'Share → Add to Home Screen' : 'Install in the browser menu'}) usually protects it. `}Keep a backup either way.`;
+}
+
+window.addEventListener('appinstalled', () => checkStorage());
 
 /* ---------- start ---------- */
 
 (async function start() {
   try {
-    const [db, state] = await Promise.all([fetch('/api/nrdb'), fetch('/api/state')]);
-    const raw = await db.json();
-    if (!db.ok) throw new Error(raw.error);
+    // Card data comes from the cache when there is one; only the very first start waits for NetrunnerDB.
+    let raw = await idb.get('nrdb', 'data');
+    const cached = !!raw;
+    if (!raw) raw = await fetchNrdb();
     loadDB(raw);
     // The product filter became a set filter; keep the set of a product picked before.
     if (UI.filters.pack) { UI.filters.set = DB.packByCode.get(UI.filters.pack)?.cycle_code || ''; delete UI.filters.pack; saveFilters(); }
-    S = Object.assign({ version: 1, owned: {}, decks: [], packStatus: {}, onboarded: false }, await state.json());
-    if (!S.onboarded && Object.keys(S.owned).length) S.onboarded = true;
+    S = migrate(await idb.get('state', 'collection'));
+    base = S.meta.updated ?? null;
     setSaveStatus('');
     route();
+    registerWorker().catch(e => console.warn('Service worker not registered:', e));
+    checkStorage().catch(() => {});
+    if (cached && navigator.onLine !== false && !(Date.now() - Date.parse(raw.fetched) < NRDB_MAX_AGE)) {
+      fetchNrdb().then(r => { loadDB(r); render(); toast('Card data updated from NetrunnerDB.'); })
+        .catch(e => console.warn('Background card data refresh failed:', e));
+    }
   } catch (e) {
     $('#app').innerHTML = `<p class="error">Could not start: ${esc(e.message)}</p>`;
   }

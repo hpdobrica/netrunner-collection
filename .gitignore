@@ -1,6 +1,3 @@
-data/nrdb-cache.json
-data/*.tmp
-data/backups/
-netrunner.exe
-data/icons/
-netrunner.*.exe
+# Personal data from the earlier Go version: never commit it (this repository is public).
+data/
+*.exe
