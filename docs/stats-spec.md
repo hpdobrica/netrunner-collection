@@ -90,10 +90,9 @@ as it was sold.
   - Extra copies beyond what came in the box don't push it past 100%.
   - Example: a 65-card pack with 62 cards at 3 and 3 identities at 1 is 189 cards. Owning one of each is
     65 / 189 = 34%.
-- **Count reprints** toggle, off by default (decided: a set shows the cards of that printing, like a binder page):
-  - On, a card's *have* comes from any printing of that title. Example: Hedge Fund from System Gateway fills
-    Core Set's Hedge Fund.
-  - Off answers "what's in my binder for this set". On answers "can I play everything in this set".
+- Only that set's printings count (decided: a set shows the cards of that printing, like a binder page).
+  Hedge Fund from System Gateway doesn't fill Core Set's Hedge Fund. A *Count reprints* toggle was tried and
+  removed: it made sets you own nothing from look started.
 - **Layout:**
   - one horizontal bar per set, grouped under cycle headings with the set symbol;
   - each bar shows owned and missing, with `have / need · %` as text beside it;
@@ -114,8 +113,9 @@ This answers "how much of my collection is tied up in decks?".
 - **Per built deck:** one bar per built deck showing the cards it borrows from your collection, largest first,
   with the deck's faction colour and name. Tapping one opens the deck.
 - **Short for saved decks:** the copies you'd need to print to build every unbuilt deck from free cards. This is
-  a sum of each deck's *Print list* that doesn't double-count the same title. Tapping it opens the Collection
-  list filtered to those titles.
+  a sum of each deck's *Print list* that doesn't double-count the same title. Tapping it opens the list as text
+  to copy (`3x Title` lines), with a link to each short deck's proxy sheet. Printed copies are recorded per deck,
+  so there is no one proxy sheet for all of them.
 
 ### 4. By faction
 
@@ -195,9 +195,8 @@ Use a test collection on another port, not real data.
    - 1 of each card in a pack shows about 33%; one complete core set shows 100%;
    - a 4th copy of one card doesn't push it past 100%;
    - an identity counts 1/1.
-3. **Count reprints:**
-   - with the System Gateway Hedge Fund only, Core Set's Hedge Fund counts as 0/3 with the toggle off and 3/3
-     with it on.
+3. **Printings:**
+   - with the System Gateway Hedge Fund only, Core Set's Hedge Fund counts as 0/3.
 4. **Free vs in decks:**
    - build a deck that uses 2 of your 3 copies: free goes down by 2 and in-decks up by 2;
    - unbuild it and both go back;
@@ -216,6 +215,6 @@ Use a test collection on another port, not real data.
 
 ## Milestones
 
-1. **Numbers and sets:** route, nav, options row, headline tiles, set completion with the *Count reprints* toggle.
+1. **Numbers and sets:** route, nav, options row, headline tiles, set completion.
 2. **Decks:** free vs in decks, per-deck bars, short-for-decks.
 3. **Breakdowns:** by faction, by type, shopping list, empty states, phone pass.

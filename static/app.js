@@ -481,7 +481,7 @@ const UI = {
   check: { text: '', result: null, error: '' },
   modal: null,
   // Stats screen options, remembered like the Collection filters.
-  stats: Object.assign({ side: '', hideRotated: false, reprints: false, sort: 'release', hideUnowned: true }, store.get('stats', {})),
+  stats: Object.assign({ side: '', hideRotated: false, sort: 'release', hideUnowned: true }, store.get('stats', {})),
   statsAll: {}, // shopping lists opened with Show all (this visit only)
   only: null, // { label, keys }: a Stats tap limiting the Collection list to some titles; cleared on leaving it
 };
@@ -1387,7 +1387,7 @@ const STATS_TYPES = { runner: ['identity', 'event', 'hardware', 'resource', 'pro
 const STATS_TOP = 10;
 
 // Walks the card data once and returns every number the Stats screen shows. Nothing here is stored.
-// o: the screen's options (side, hideRotated, reprints).
+// o: the screen's options (side, hideRotated).
 function statsFor(o) {
   const locks = computeLocks();
   const titleOk = t => titleVisible(t) && (!o.side || t.side === o.side) && !(o.hideRotated && t.rotated);
@@ -1427,7 +1427,7 @@ function statsFor(o) {
     for (const c of cs) {
       const q = c.quantity || 1;
       need += q;
-      have += Math.min(q, o.reprints ? titleOwned(c.key) : own(c.code).n);
+      have += Math.min(q, own(c.code).n);
     }
     s.sets.push({ p, have, need });
   }
@@ -1497,7 +1497,7 @@ function viewStats(app) {
       ${sxTile('Cards', s.cards)}
       ${sxTile('Titles', `${s.titles} <small>/ ${s.titlesAll}</small>`, `${pct(s.titles, s.titlesAll)}% owned`)}
       ${sxTile('Playsets', `${s.playsets} <small>/ ${s.titlesAll}</small>`, `${pct(s.playsets, s.titlesAll)}% of titles`)}
-      ${sxTile('Sets complete', `${complete} <small>/ ${s.sets.length}</small>`, o.reprints ? 'counting reprints' : 'this printing only')}
+      ${sxTile('Sets complete', `${complete} <small>/ ${s.sets.length}</small>`)}
       ${sxTile('Alt art', s.alt, `${pct(s.alt, s.cards)}% of cards`)}
       ${sxTile('Spare', s.spare, 'beyond a playset')}
     </div>
@@ -1534,7 +1534,6 @@ function statsSets(s, o) {
     <h2>Set completion</h2>
     <p class="muted">One complete box as sold is 100%: the copies of each card the product came with.</p>
     <div class="toolbar">
-      <label class="check" title="Count copies from any printing of a title"><input type="checkbox" data-stat="reprints" ${o.reprints ? 'checked' : ''}> Count reprints</label>
       <select data-stat="sort" aria-label="Sort sets">${[['release', 'Release order'], ['pct', '% complete'], ['missing', 'Most missing']]
         .map(([v, l]) => `<option value="${v}" ${o.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <label class="check"><input type="checkbox" data-stat="hideUnowned" ${o.hideUnowned ? 'checked' : ''}> Hide sets I don't own</label>
@@ -2060,9 +2059,15 @@ const act = {
   'st-all': el => { UI.statsAll[el.dataset.v] = !UI.statsAll[el.dataset.v]; render(); },
   'st-faction': el => { const f = el.dataset.v; collectionFrom({ faction: f, side: CORP_FACTIONS.includes(f) ? 'corp' : 'runner' }); },
   'st-type': el => collectionFrom({ type: el.dataset.v, side: el.dataset.side }),
+  // A list to copy, and a link to each short deck's proxy sheet (printed copies are recorded per deck).
   'st-short': () => {
-    const keys = [...statsFor(UI.stats).short.values()].filter(x => x.unbuilt).map(x => x.t.key);
-    collectionFrom({}, { label: 'cards short for saved decks', keys: new Set(keys) });
+    const short = [...statsFor(UI.stats).short.values()].filter(x => x.unbuilt)
+      .sort((a, b) => TYPES.indexOf(a.t.type) - TYPES.indexOf(b.t.type) || a.t.title.localeCompare(b.t.title));
+    const decks = S.decks.filter(d => !d.built && (!UI.stats.side || deckSide(d) === UI.stats.side))
+      .map(d => ({ d, n: planDeck(d).sum.print })).filter(x => x.n);
+    const links = decks.map(({ d, n }) => `<a href="javascript:" data-act="proxy-deck" data-v="${d.id}">${esc(d.name || 'Untitled deck')}</a> (${n})`).join(', ');
+    showText('Short for saved decks', short.map(x => `${x.unbuilt}x ${x.t.title}`).join('\n'),
+      `Each card at the most copies any one unbuilt deck is short of. Proxy sheet for a deck: ${links}.`);
   },
   'lock': () => {
     S.locked = !S.locked;
@@ -2211,6 +2216,7 @@ const act = {
   },
   'copy-deck': () => showText('Deck list', deckText(currentDeck())),
   'proxy-open': () => { UI.proxyMode = null; location.hash = '#proxies/' + currentDeck().id; },
+  'proxy-deck': el => { UI.proxyMode = null; location.hash = '#proxies/' + el.dataset.v; },
   'proxy-mode': el => { UI.proxyMode = el.dataset.v; render(); },
   'pdf-opt': el => { store.set('proxyPdf', { ...pdfOpts(), [el.dataset.k]: el.dataset.v }); render(); },
   'proxy-pdf': () => startPdf(),
