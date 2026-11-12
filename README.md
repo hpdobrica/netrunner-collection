@@ -8,7 +8,7 @@ The app is a static web page (`static/`): no server of its own, no build step. I
 your browser, fetches card data from NetrunnerDB directly, and can be installed to a phone's home screen or a
 desktop and used offline. The plan is in [docs/pwa-spec.md](docs/pwa-spec.md).
 
-**Use it at https://www.dobrica.sh/netrunner-collection/**
+**Use it at https://netrunner-collection.dobrica.sh/**
 
 ## Run
 
