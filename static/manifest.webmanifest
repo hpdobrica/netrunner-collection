@@ -1,6 +1,6 @@
 {
   "name": "Netrunner Collection",
-  "short_name": "Netrunner",
+  "short_name": "Netrunner Collection",
   "description": "Catalogue your Netrunner cards and check which decks you can build.",
   "id": "./",
   "start_url": "./",

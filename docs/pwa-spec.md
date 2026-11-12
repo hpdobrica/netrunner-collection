@@ -141,7 +141,7 @@ The format is unchanged from today, with one new `meta` block:
 ## Offline and installing
 
 - `manifest.webmanifest`:
-  - name "Netrunner Collection", short name "Netrunner"
+  - name "Netrunner Collection", short name "Netrunner Collection" (the same)
   - `display: standalone`
   - dark theme colour
   - 192 px, 512 px and maskable icons
