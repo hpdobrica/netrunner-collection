@@ -4,7 +4,7 @@
 
 // Change VERSION with every deploy. The new worker then caches the new files and waits; the app shows
 // "New version available" and switches only when the user taps Reload.
-const VERSION = '2026-11-12.20';
+const VERSION = '2026-11-12.21';
 const SHELL = 'shell-' + VERSION;
 const IMAGES = 'images';
 const MAX_IMAGES = 600; // about 50 MB; the oldest are removed first

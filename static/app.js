@@ -418,7 +418,11 @@ function matchTitle(s) {
   return t;
 }
 
-const isHeader = line => /^[\w &-]+\s*\(\d+\)$/.test(line) || /influence|cards up to|deck built|total|^\d+ cards/i.test(line);
+// Section headings ("Event (16)") and the summary lines deck builders add at the end: influence, agenda points,
+// card totals, the sets used ("Cards up to Elevation", "Sets: …"), where it was built. Never cards, so never reported.
+// Anchored to how those lines start, so a misspelled card ("1x Totally Not A Card") is still reported.
+const isHeader = line => /^[\w &-]+\s*\(\d+\)$/.test(line) ||
+  /^(\d+ )?(influence|agenda points?|cards)\b|influence spent|^(cards up to|deck built|total)\b|^((included|legal) )?(sets?|packs?|cycles?|products?)( used)?\s*:|netrunnerdb\.com|jinteki\.net/i.test(line);
 
 function parseDeckText(text) {
   const cards = {}, unknown = [];
@@ -428,12 +432,16 @@ function parseDeckText(text) {
     if (!line) continue;
     // No card line is this long. Matching very long lines takes seconds (the patterns below backtrack).
     if (line.length > 300) { unknown.push(line.slice(0, 60) + '…'); continue; }
+    // Checked on the whole line: summary lines start with a number too ("15 influence spent", "45 cards (min 45)").
+    const header = isHeader(line);
     let qty = 1, m, counted = false;
     if ((m = line.match(/^(\d+)\s*[x×]?\s+(.+)$/i))) { qty = +m[1]; line = m[2]; counted = true; }
     else if ((m = line.match(/^(.+?)\s+[x×]\s*(\d+)$/i))) { qty = +m[2]; line = m[1]; counted = true; }
     const t = matchTitle(line);
     if (t) {
       cards[t.newest.code] = clampCount((cards[t.newest.code] || 0) + qty);
+    } else if (header) {
+      continue;
     } else if (!counted && !name && !Object.keys(cards).length && !isHeader(line)) {
       name = line;
     } else if (counted || !isHeader(line)) {
