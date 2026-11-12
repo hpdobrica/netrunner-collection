@@ -141,8 +141,8 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   keeps them in the browser, and ranks them by how many cards you'd be missing. Filter by side, faction, how many
   missing, tournament decks, and **Legal in Standard** or **Legal in Startup**, judged from each deck's cards (card
   pool and current ban list), not from the ban list its author picked. **Save as deck** adds one to your decks.
-- **Stats**: the shape of the collection at a glance: totals, how complete each set is (one box as sold is 100%;
-  *Count reprints* also counts copies from other printings), how much is tied up in built decks, breakdowns by
+- **Stats**: the shape of the collection at a glance: totals, how complete each set is (one box as sold is 100%,
+  counting only that set's printings), how much is tied up in built decks, breakdowns by
   faction and type, and a shopping list. Tap a bar to go to that set, deck or filtered list. Nothing new is stored.
 - **Several tabs**: a change in one tab shows up in the others. A tab that somehow missed it reloads instead
   of overwriting the newer data.
