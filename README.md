@@ -102,7 +102,9 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
 - **Setup**: tick the products you own complete (×1, ×2…) and the ones you only have part of. You can also
   paste starter/printed deck lists. Then you're walked through each partial product.
 - **Add by set**: a grid per product in release order. Click or use the keyboard: arrows, `0`–`9`
-  for the count, `A` / `Shift+A` for alt art, `Enter` to mark the product done and move on.
+  for the count, `A` / `Shift+A` for alt art, `Enter` for the next product. Each product shows your copies against
+  one complete box, and its dot in the side list is empty, half or green for none, some or a complete box.
+  *N missing* shows only the cards you're short of.
 - **Collection**: a list of all titles (no images, so it's quick on a phone). Search and filter, adjust counts,
   open a card to see it and set per-printing counts and alt art.
   The set filter has one entry per set symbol, so Downfall and Uprising are both Ashes (cards 1–130).

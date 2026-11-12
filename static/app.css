@@ -175,6 +175,7 @@ table.list { width: 100%; border-collapse: collapse; }
 .prow.cur { background: var(--panel2); outline: 1px solid var(--accent); }
 .pname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pcount { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pmiss { color: var(--warn); }
 .sdot { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
 .prow.partial .sdot { border-color: var(--warn); background: linear-gradient(90deg, var(--warn) 50%, transparent 50%); }
 .prow.done .sdot { border-color: var(--ok); background: var(--ok); }
