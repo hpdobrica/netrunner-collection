@@ -357,21 +357,23 @@ ul.plain { padding-left: 18px; margin: 0; }
 .th-sort.on { color: var(--text); font-weight: 600; }
 #results .list td .stepper.small .n { min-width: 22px; }
 
-/* proxy sheet: real card size on paper, nine to an A4 or Letter page */
-.proxy-sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 16px; }
-.proxy { position: relative; aspect-ratio: 63 / 88; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+/* proxy sheet: options, Download PDF and a preview of the PDF's cards */
+.proxy-tools p { max-width: 70ch; }
+.proxy-tools .small { font-size: 13px; margin: 6px 0 0; }
+.pdf-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 12px; }
+.pdf-opt { display: inline-flex; align-items: center; gap: 8px; }
+.pdf-opt > .muted { font-size: 13px; }
+#pdf-btn .n { opacity: .75; font-weight: normal; margin-left: 4px; }
+.pdf-done { margin: 10px 0 0; overflow-wrap: anywhere; }
+.proxy-sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; margin-top: 16px; }
+.proxy { position: relative; aspect-ratio: 63.5 / 88.9; background: var(--panel2); border-radius: 4px; overflow: hidden; }
 .proxy img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
 .proxy img.broken { display: none; }
 .proxy .ph { border: 1px solid var(--line); }
-@page { margin: 6mm; }
-@media print {
-  body { background: #fff; color: #000; }
-  .top, .toast, .modal, .proxy-tools { display: none !important; }
-  main { padding: 0 !important; }
-  .proxy-sheet { display: flex; flex-wrap: wrap; gap: 0; width: 189mm; margin: 0 auto; }
-  .proxy { width: 63mm; height: 88mm; aspect-ratio: auto; border-radius: 0; background: none; outline: .2mm solid #bbb; outline-offset: -.1mm; break-inside: avoid; }
-  .proxy .ph { color: #000; border: 0; font-size: 14pt; }
-}
+.proxy.ffg { opacity: .35; filter: grayscale(1); }
+.ffg-tag { position: absolute; left: 0; right: 0; bottom: 8px; z-index: 2; text-align: center; font-size: 12px; font-weight: 600;
+  background: rgba(0, 0, 0, .75); color: #fff; padding: 3px 0; }
+.proxy-break { grid-column: 1 / -1; font-size: 12px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 4px; }
 @media (max-width: 640px) {
   /* Two steppers per row: smaller buttons, and In decks goes (Free still shows what's left). */
   #results .list .stepper button { width: 32px; min-height: 32px; }
