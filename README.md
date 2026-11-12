@@ -30,8 +30,9 @@ with the UI built in.
 - `-port 9000`: use a different port
 - `-no-open`: don't open a browser tab
 
-Its `/api/*` endpoints and `data/` folder are from the earlier version, which kept the collection on the PC.
-The current UI doesn't use them.
+It only serves files. The earlier version also had `/api/*` endpoints that kept the collection in `data/` on the
+PC; they are gone, because anyone on the network could read or overwrite it through them. An old
+`data/collection.json` loads with *Restore from backup*.
 
 ## Install and offline
 
