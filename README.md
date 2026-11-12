@@ -110,3 +110,10 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   against your collection.
 - **Several tabs**: a change in one tab shows up in the others. A tab that somehow missed it reloads instead
   of overwriting the newer data.
+
+## Disclaimer
+
+This is an unofficial fan tool. It is not affiliated with, endorsed by or sponsored by Fantasy Flight Games,
+Wizards of the Coast, Null Signal Games or NetrunnerDB. Netrunner and Android are trademarks of Fantasy Flight
+Publishing, Inc. and/or Wizards of the Coast LLC. Card names, text, images and set symbols belong to their
+respective owners. Card data and images are loaded from NetrunnerDB at runtime and are not part of this repository.
