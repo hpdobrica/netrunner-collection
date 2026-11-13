@@ -1448,6 +1448,20 @@ async function loadImages(job) {
   await buildPdf(job);
 }
 
+// The items that go into the PDF: those whose image loaded. When an item that starts a new page is left out (its image
+// couldn't be loaded), the next one left in starts it instead, so a deck still begins on a fresh page.
+function placedItems(job) {
+  const out = [];
+  let newPage = false;
+  for (const x of job.items) {
+    newPage ||= !!x.newPage;
+    if (!job.got.has(x.id)) continue;
+    out.push(newPage && !x.newPage ? { ...x, newPage } : x);
+    newPage = false;
+  }
+  return out;
+}
+
 // Each image with its place k in the PDF: page floor(k / 9), spot k % 9. An item marked newPage skips to the next page.
 function proxySlots(items) {
   let k = 0;
@@ -1498,7 +1512,7 @@ async function buildPdf(job, skip = []) {
     doc.setProperties({ title: `${job.name || 'Deck'}: cards to print`, creator: 'Netrunner Collection' });
     const pw = doc.internal.pageSize.getWidth(), ph = doc.internal.pageSize.getHeight();
     const L = proxyLayout(pw, ph, +bleed);
-    proxySlots(job.items.filter(x => job.got.has(x.id))).forEach(({ x, k }, i) => {
+    proxySlots(placedItems(job)).forEach(({ x, k }, i) => {
       if (i && k % 9 === 0) doc.addPage(format);
       const col = k % 3, row = Math.floor(k % 9 / 3);
       // The alias makes the copies of a card share one embedded image.
@@ -2568,7 +2582,10 @@ function renderPrintMenu() {
     ${jobs.length ? jobs.map(j => `<div class="pq-job">
         <details><summary><b>${esc(j.title)}</b> <span class="muted">${plural(jobSize(j), 'card')} · ${niceDate(j.created)}</span></summary>
           <div class="pq-cards">${cardList(j)}</div></details>
-        <div class="pq-acts"><button class="primary" data-act="pq-done" data-id="${j.id}">Printed: add to collection</button>
+        <div class="pq-acts">${S.locked
+          // Adding cards changes counts, which a locked collection refuses: say so on the button, not after a click.
+          ? '<button class="primary" disabled title="The collection is locked: unlock it with the lock at the top to add these cards">Locked: unlock at the top</button>'
+          : `<button class="primary" data-act="pq-done" data-id="${j.id}">Printed: add to collection</button>`}
           <button data-act="pq-cancel" data-id="${j.id}">Cancel</button></div>
       </div>`).join('')
       : '<div class="menu-note">Nothing waiting. Each PDF you make from Print cards waits here until you mark it printed.</div>'}
