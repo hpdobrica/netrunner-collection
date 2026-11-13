@@ -519,6 +519,7 @@ const UI = {
   // Print cards for several decks: the decks picked (none at first, this visit only), which cards, and whether
   // each deck starts a new page (both remembered).
   print: Object.assign({ ids: new Set(), mode: 'missing', split: false }, store.get('printDecks', {}), { ids: new Set() }),
+  deckGroup: store.get('deckGroup', 'type') === 'set' ? 'set' : 'type', // a deck's cards by type or by set (remembered)
 };
 
 function route() {
@@ -533,9 +534,10 @@ function route() {
   render();
 }
 
-// Actions that change what you own. A locked collection refuses them; decks can still be built and edited.
+// Actions that change what you own, or the cards of a saved deck. A locked collection refuses them; new decks can
+// still be saved, and decks built, deconstructed, renamed and printed.
 const LOCKED_ACTS = new Set(['print-n', 'alt', 'pack-box', 'pack-clear', 'add-list-open', 'add-list', 'w-finish', 'restore',
-  'pq-done']);
+  'pq-done', 'deck-q', 'deck-add', 'unproxy', 'deck-delete']);
 const lockNote = '<p class="lock-note">Collection is locked, so counts can\'t be changed. Use the lock at the top to unlock it.</p>';
 const LOCK_SVG = {
   true: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
@@ -716,6 +718,11 @@ function groupByCycle(packs) {
 // A card's printings shown in the list: the publisher setting hides the other publisher's, unless you own some.
 const listPrintings = t => t.printings.filter(p => pubOk(p.pack) || own(p.code).n);
 
+// Set order follows how cards sit in a binder: product release order, then card number.
+// Booster packs number their own cards from 1, so they go after the set's main run.
+const setKey = p => [p.pack.cycle?.order ?? 9998, +/booster/i.test(p.pack.name), p.pack.order, p.position];
+const setCmp = (x, y) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3];
+
 function filteredRows(locks) {
   const f = UI.filters, q = norm(f.q);
   const rows = [];
@@ -742,15 +749,12 @@ function filteredRows(locks) {
       rows.push({ t, p });
     }
   }
-  // Set order follows how cards sit in a binder: product release order, then card number.
-  // Booster packs number their own cards from 1, so they go after the set's main run.
-  const setKey = p => [p.pack.cycle?.order ?? 9998, /booster/i.test(p.pack.name), p.pack.order, p.position];
   const ls = listSort(), dir = ls.dir === 'desc' ? -1 : 1;
   // Within a card, newest printing first.
   const byName = (a, b) => a.t.title.localeCompare(b.t.title) || b.p.pack.order - a.p.pack.order;
   if (ls.sort === 'set') {
     const keys = new Map(rows.map(r => [r, setKey(r.p)]));
-    rows.sort((a, b) => { const x = keys.get(a), y = keys.get(b); return dir * (x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3]); });
+    rows.sort((a, b) => dir * setCmp(keys.get(a), keys.get(b)));
   } else if (SORT_VALUE[ls.sort]) {
     // Ties (and blank cells) keep A–Z order whichever way the column is sorted.
     const vals = new Map(rows.map(r => [r, SORT_VALUE[ls.sort](r, locks)]));
@@ -1085,16 +1089,32 @@ function deckCard(d, locks) {
   </a>`;
 }
 
+// Where to find a deck's card in your collection: the printings you own, most copies first (newest on a tie), else
+// the newest. Decks record cards, not printings; By set groups a card under the first.
+function deckPrintings(r) {
+  const owned = r.t.printings.filter(p => own(p.code).n)
+    .sort((a, b) => own(b.code).n - own(a.code).n || b.pack.order - a.pack.order);
+  return owned.length ? owned : [r.t.newest];
+}
+
+function setCell(r) {
+  const ps = deckPrintings(r);
+  return `<td class="setno" title="${esc(ps.map(p => `${p.pack.name} #${p.position}`).join(', '))}">${
+    ps.map(p => `<span>${setIcon(p.pack.cycle_code)}${p.position}</span>`).join('')}</td>`;
+}
+
 function planRow(r, deck) {
   const t = r.t;
   const status = [];
+  const edit = deck && !S.locked;
   if (r.print) status.push(`<span class="st print">print ${r.print}</span>`);
   if (r.printing) status.push(`<span class="st printing">${r.printing} printing</span>`);
   for (const b of r.borrow) status.push(`<span class="st borrow">take ${b.n} of the ${b.has} in <a href="#deck/${b.deck.id}">${esc(deckName(b.deck))}</a></span>`);
-  if (r.proxies) status.push(`<span class="st proxy">${r.proxies} printed${deck ? ` <button class="x" data-act="unproxy" data-key="${esc(r.key)}" title="Stop counting as printed">×</button>` : ''}</span>`);
+  if (r.proxies) status.push(`<span class="st proxy">${r.proxies} printed${edit ? ` <button class="x" data-act="unproxy" data-key="${esc(r.key)}" title="Stop counting as printed">×</button>` : ''}</span>`);
   if (!r.print && !r.printing && !r.borrowN) status.push('<span class="st ok">✓</span>');
   return `<tr data-key="${esc(r.key)}">
-    <td class="q">${deck ? stepper('deck-q', `data-key="${esc(r.key)}"`, r.qty) : r.qty + '×'}</td>
+    <td class="q">${edit ? stepper('deck-q', `data-key="${esc(r.key)}"`, r.qty) : r.qty + '×'}</td>
+    ${setCell(r)}
     <td><span class="dot" style="--fc:${fcolor(t.faction)}"></span><a href="javascript:" data-act="card" data-key="${esc(r.key)}">${esc(t.title)}</a></td>
     <td class="muted">owned ${r.owned}</td>
     <td>${status.join(' ')}</td>
@@ -1126,22 +1146,38 @@ function viewDeck(app) {
           ${sum.print ? `<button data-act="show-print">Print list (${sum.print})</button>` : ''}
           ${!deck.built && sum.print ? '' : '<button data-act="proxy-open">Print cards</button>'}
           <button data-act="copy-deck">Deck list</button>
-          <button class="danger" data-act="deck-delete">Delete</button>
+          ${S.locked ? '' : '<button class="danger" data-act="deck-delete">Delete</button>'}
         </div>
         <textarea class="notes" data-deck-field="notes" rows="2" placeholder="Notes (e.g. which sleeves, which alt arts)">${esc(deck.notes || '')}</textarea>
       </div>
     </div>
-    <div class="add-card">
-      <input id="deck-add" placeholder="Add a card by name…" autocomplete="off">
-      <div id="deck-add-results" class="ac"></div>
+    <div class="deck-tools">
+      ${S.locked ? '<p class="lock-note">Collection is locked, so this deck\'s cards can\'t be changed. Use the lock at the top to unlock it.</p>'
+        : `<div class="add-card">
+        <input id="deck-add" placeholder="Add a card by name…" autocomplete="off">
+        <div id="deck-add-results" class="ac"></div>
+      </div>`}
+      <span class="seg small" title="By set: in binder order, to gather the cards">${[['type', 'By type'], ['set', 'By set']]
+        .map(([v, l]) => `<button class="${UI.deckGroup === v ? 'on' : ''}" data-act="deck-group" data-v="${v}">${l}</button>`).join('')}</span>
     </div>
-    ${TYPES.map(type => {
-      const rs = rows.filter(r => r.t.type === type);
-      if (!rs.length) return '';
-      return `<h3>${TYPE_NAMES[type]} <span class="muted">${rs.reduce((a, r) => a + r.qty, 0)}</span></h3>
-        <table class="list compact"><tbody>${rs.map(r => planRow(r, deck)).join('')}</tbody></table>`;
-    }).join('')}
+    ${deckGroups(rows).map(g => `<h3>${g.head} <span class="muted">${g.rows.reduce((a, r) => a + r.qty, 0)}</span></h3>
+        <table class="list compact"><tbody>${g.rows.map(r => planRow(r, deck)).join('')}</tbody></table>`).join('')}
   </div>`;
+}
+
+// A deck's cards by type (as deck lists are written), or by the product of the printing you own, in binder order.
+function deckGroups(rows) {
+  if (UI.deckGroup !== 'set') return TYPES.map(type => ({ head: TYPE_NAMES[type], rows: rows.filter(r => r.t.type === type) }))
+    .filter(g => g.rows.length);
+  const keyed = rows.map(r => { const p = deckPrintings(r)[0]; return { r, p, k: setKey(p) }; })
+    .sort((a, b) => setCmp(a.k, b.k) || a.r.t.title.localeCompare(b.r.t.title));
+  const groups = [];
+  for (const x of keyed) {
+    const last = groups[groups.length - 1];
+    if (last?.pack === x.p.pack) last.rows.push(x.r);
+    else groups.push({ pack: x.p.pack, head: setIcon(x.p.pack.cycle_code) + esc(x.p.pack.name), rows: [x.r] });
+  }
+  return groups;
 }
 
 /* ---------- proxy sheet (PDF) ---------- */
@@ -2384,6 +2420,7 @@ const act = {
     save(); render();
     $('#deck-add').focus();
   },
+  'deck-group': el => { UI.deckGroup = el.dataset.v; store.set('deckGroup', UI.deckGroup); render(); },
   'unproxy': el => { const deck = currentDeck(); delete deck.proxies[el.dataset.key]; save(); render(); },
   'show-print': () => {
     const { sum } = planDeck(currentDeck());
@@ -2642,7 +2679,9 @@ document.addEventListener('click', e => {
     if (el.tagName === 'A' && el.getAttribute('href') === 'javascript:') e.preventDefault();
     if (S.locked && LOCKED_ACTS.has(el.dataset.act)) {
       $('.menu').open = false;
-      return toast(el.dataset.act === 'restore' ? 'Collection is locked. Unlock it before restoring a backup.'
+      const a = el.dataset.act;
+      return toast(a === 'restore' ? 'Collection is locked. Unlock it before restoring a backup.'
+        : a.startsWith('deck-') || a === 'unproxy' ? 'Collection is locked. Use the lock at the top to change this deck.'
         : 'Collection is locked. Use the lock at the top to change counts.');
     }
     act[el.dataset.act](el, e);

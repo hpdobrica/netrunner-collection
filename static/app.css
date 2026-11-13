@@ -237,7 +237,21 @@ table.list { width: 100%; border-collapse: collapse; }
 .deck-name { width: 100%; font-size: 20px; font-weight: 700; background: none; border-color: transparent; padding-left: 4px; }
 .deck-name:hover, .deck-name:focus { border-color: var(--line); }
 .notes { margin-top: 10px; }
-.add-card { position: relative; margin: 16px 0 4px; max-width: 480px; }
+.deck-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 0 4px; }
+.deck-tools .lock-note { display: block; margin: 0; }
+.add-card { position: relative; flex: 1 1 240px; max-width: 480px; }
+.deck-page h3 .set-icon { margin-right: .3em; }
+.deck-page td.setno > span { display: block; }
+.deck-page td.setno > span + span { opacity: .5; }
+/* A deck's groups are separate tables: fixed widths keep their columns in line. */
+@media (min-width: 641px) {
+  .deck-page .list.compact { table-layout: fixed; }
+  .deck-page .list.compact td.q { width: 120px; }
+  body.locked .deck-page .list.compact td.q { width: 44px; }
+  .deck-page .list.compact td.setno { width: 76px; }
+  .deck-page .list.compact td:nth-child(4) { width: 90px; }
+  .deck-page .list.compact td:nth-child(5) { width: 32%; }
+}
 .add-card input { width: 100%; }
 .ac { position: absolute; z-index: 10; left: 0; right: 0; top: calc(100% + 2px); display: grid; background: var(--panel); border-radius: 6px; box-shadow: 0 8px 30px #0006; }
 .ac:empty { display: none; }
@@ -335,7 +349,7 @@ ul.plain { padding-left: 18px; margin: 0; }
   .check-panel { padding: 12px; }
   .deck-head { flex-direction: column; }
   .deck-head .deck-id.big { display: none; }
-  .deck-page .list.compact td:nth-child(3) { display: none; }
+  .deck-page .list.compact td:nth-child(4) { display: none; }
   .modal { padding: 0; align-items: end; }
   .modal-box { flex-direction: column; border-radius: 12px 12px 0 0; max-height: 92vh; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
   .modal-img { flex: none; width: 45%; margin: 0 auto; }
