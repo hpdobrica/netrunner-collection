@@ -123,19 +123,28 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   **Add cards: From a list** adds a new starter deck, trade or booster on top of what you have.
 - **Decks**: paste a list or a NetrunnerDB link into *Can I build this?* For each card it shows whether
   it's free, held by another built deck, or has to be printed. Save it as a deck, then **Build** it to
-  borrow the cards. **Print list** shows what you're short of, ready to copy. **I printed them** records proxies as part of that deck, so they never count
-  against your collection.
-- **Proxy sheet** (on a deck): makes a PDF to print and cut out, laid out like NetrunnerDB's print-and-play: cards at
+  borrow the cards. A deck short of cards you don't own offers **Print cards** instead: printed cards become cards you
+  own, so it's built once they're printed. **Print list** shows what you're short of, ready to copy. (Decks saved by
+  earlier versions may still hold printed copies of their own, shown as *N printed* on the deck; × removes them.)
+- **Print cards** (on a deck): makes a PDF to print and cut out, laid out like NetrunnerDB's print-and-play: cards at
   63.5 × 88.9 mm, nine to a page, with NetrunnerDB's 300 dpi images. Choose the cards not owned, not free or the whole
   deck; paper (A4 or Letter; the first time, Letter in the US, Canada and a few other countries, else A4); cut marks
   (none, lines across the page, or short marks in the margin); and bleed (a 3 or 6 mm gap between cards, which shrink
   a little to make room). The choices are remembered on the device. Double-faced identities (Hoshiko, Earth Station,
   Dewi, Nebula, Méliès U) also print their other faces. Print at 100%, not "fit to page".
   **Only Null Signal Games cards are printed**: a card only Fantasy Flight Games published is greyed out, listed above
-  the preview and left out of the PDF, and *I printed them* there doesn't count it. Each card uses the image of its
+  the preview and left out of the PDF. Each card uses the image of its
   newest Null Signal printing that has one at 300 dpi; cards printed only in System Core 2019 or System Update 2021
   have just a 300 × 420 image on NetrunnerDB and come out less sharp. If an image can't be loaded (say offline, when no PDF
-  with that card was made on this device before), it says which and offers to try again or leave them out. The PDF library ([jsPDF](https://github.com/parallax/jsPDF)
+  with that card was made on this device before), it says which and offers to try again or leave them out.
+  **Print cards for several decks** (a button on Decks, and in the print queue) does the same for any decks you tick,
+  deck after deck in one PDF, each deck counted as on its own page; *Each deck: New page* starts every deck on a fresh
+  page.
+- **Print queue** (the printer button at the top, with a dot while something waits): every PDF you download becomes a
+  print job listing its cards. **Printed: add to collection** adds them to your collection, as copies of the printing
+  whose image the PDF used; **Cancel** drops the job. Until then the cards show as *printing* on decks: they aren't
+  asked for again by Not owned or Not free, but a deck waiting for them can't be built yet. The same PDF made twice
+  doesn't make a second job. The queue is saved with the collection and in backups. The PDF library ([jsPDF](https://github.com/parallax/jsPDF)
   4.2.1, MIT licence) is in `static/vendor/`, loaded only when making a PDF and precached for offline use.
 - **Find on NetrunnerDB** (a tab on Decks): fetches decklists published on NetrunnerDB over the last 1 to 24 months,
   keeps them in the browser, and ranks them by how many cards you'd be missing. Filter by side, faction, how many
