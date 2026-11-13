@@ -83,8 +83,12 @@ body.locked .lock-btn { color: var(--accent-ink); background: var(--accent); bor
 .pq-job summary .muted { font-size: 12px; }
 .pq-cards { font-size: 13px; color: var(--muted); padding: 6px 0 0 12px; max-height: 200px; overflow-y: auto; }
 .pq-acts { display: flex; gap: 6px; margin-top: 6px; }
-.pq-acts button { min-height: 32px; font-size: 13px; padding: 0 10px; border: 1px solid var(--line); }
-.pq-acts button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+/* .pq-body: outranks the .menu-body button rules (no border, grey on hover), which would turn the primary button grey
+   on hover, and keep it so after a refused click (a locked collection), as nothing redraws it. */
+.pq-body .pq-acts button { min-height: 32px; font-size: 13px; padding: 0 10px; border: 1px solid var(--line); background: var(--panel2); }
+.pq-body .pq-acts button:hover:not(:disabled) { background: var(--panel2); border-color: var(--muted); }
+.pq-body .pq-acts button.primary, .pq-body .pq-acts button.primary:hover:not(:disabled) {
+  background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 @media (max-width: 640px) {
   .pq .pq-body { position: fixed; left: 8px; right: 8px; top: 52px; width: auto; }
 }
