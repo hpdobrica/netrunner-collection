@@ -2570,7 +2570,7 @@ function renderPrintMenu() {
           <div class="pq-cards">${cardList(j)}</div></details>
         <div class="pq-acts">${S.locked
           // Adding cards changes counts, which a locked collection refuses: say so on the button, not after a click.
-          ? '<button class="primary" disabled title="The collection is locked: unlock it with the lock at the top to add these cards">Unlock collection to add</button>'
+          ? '<button class="primary" disabled title="The collection is locked: unlock it with the lock at the top to add these cards">Locked: unlock at the top</button>'
           : `<button class="primary" data-act="pq-done" data-id="${j.id}">Printed: add to collection</button>`}
           <button data-act="pq-cancel" data-id="${j.id}">Cancel</button></div>
       </div>`).join('')
