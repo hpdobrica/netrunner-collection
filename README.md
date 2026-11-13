@@ -142,7 +142,8 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   page.
 - **Print queue** (the printer button at the top, with a dot while something waits): every PDF you download becomes a
   print job listing its cards. **Printed: add to collection** adds them to your collection, as copies of the printing
-  whose image the PDF used; **Cancel** drops the job. Until then the cards show as *printing* on decks: they aren't
+  whose image the PDF used (while the collection is locked, the button says *Unlock collection to add* and can't be
+  used); **Cancel** drops the job. Until then the cards show as *printing* on decks: they aren't
   asked for again by Not owned or Not free, but a deck waiting for them can't be built yet. The same PDF made twice
   doesn't make a second job. The queue is saved with the collection and in backups. The PDF library ([jsPDF](https://github.com/parallax/jsPDF)
   4.2.1, MIT licence) is in `static/vendor/`, loaded only when making a PDF and precached for offline use.
