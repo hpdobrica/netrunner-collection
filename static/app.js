@@ -1448,6 +1448,20 @@ async function loadImages(job) {
   await buildPdf(job);
 }
 
+// The items that go into the PDF: those whose image loaded. When an item that starts a new page is left out (its image
+// couldn't be loaded), the next one left in starts it instead, so a deck still begins on a fresh page.
+function placedItems(job) {
+  const out = [];
+  let newPage = false;
+  for (const x of job.items) {
+    newPage ||= !!x.newPage;
+    if (!job.got.has(x.id)) continue;
+    out.push(newPage && !x.newPage ? { ...x, newPage } : x);
+    newPage = false;
+  }
+  return out;
+}
+
 // Each image with its place k in the PDF: page floor(k / 9), spot k % 9. An item marked newPage skips to the next page.
 function proxySlots(items) {
   let k = 0;
@@ -1498,7 +1512,7 @@ async function buildPdf(job, skip = []) {
     doc.setProperties({ title: `${job.name || 'Deck'}: cards to print`, creator: 'Netrunner Collection' });
     const pw = doc.internal.pageSize.getWidth(), ph = doc.internal.pageSize.getHeight();
     const L = proxyLayout(pw, ph, +bleed);
-    proxySlots(job.items.filter(x => job.got.has(x.id))).forEach(({ x, k }, i) => {
+    proxySlots(placedItems(job)).forEach(({ x, k }, i) => {
       if (i && k % 9 === 0) doc.addPage(format);
       const col = k % 3, row = Math.floor(k % 9 / 3);
       // The alias makes the copies of a card share one embedded image.
