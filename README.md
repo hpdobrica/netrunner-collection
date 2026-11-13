@@ -118,7 +118,9 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
 - **Card details** (click a card's name anywhere): image, text, copies per printing and decks. `←`/`→` or the
   ‹ › buttons either side of it go to the previous / next card of the page it was opened from, in the order shown
   (the whole filtered Collection list, not just the rows loaded so far).
-- **Lock** (padlock at the top): stops count changes, so a stray tap can't edit your collection. Decks still work.
+- **Lock** (padlock at the top): stops count changes, so a stray tap can't edit your collection or a saved deck's
+  cards (a deck's +/−, adding cards and Delete are hidden). New decks can still be saved, and decks built,
+  deconstructed, renamed and printed.
   The lock is saved with the collection, so it's still on next time and is part of backups.
   **Add cards: From a list** adds a new starter deck, trade or booster on top of what you have.
 - **Decks**: paste a list or a NetrunnerDB link into *Can I build this?* For each card it shows whether
@@ -126,6 +128,10 @@ The home-screen icons in `static/icons/` are drawn by `go run ./tools/appicon`.
   borrow the cards. A deck short of cards you don't own offers **Print cards** instead: printed cards become cards you
   own, so it's built once they're printed. **Print list** shows what you're short of, ready to copy. (Decks saved by
   earlier versions may still hold printed copies of their own, shown as *N printed* on the deck; × removes them.)
+  Next to each card are the set symbol and card number of each printing you own, most copies first (decks record
+  cards, not printings), else of its newest printing. **By set** groups a deck's cards by the first one's product in
+  binder order, to gather them for building; **By type** (the default) groups them as deck lists do. The choice is
+  remembered on the device.
 - **Print cards** (on a deck): makes a PDF to print and cut out, laid out like NetrunnerDB's print-and-play: cards at
   63.5 × 88.9 mm, nine to a page, with NetrunnerDB's 300 dpi images. Choose the cards not owned, not free or the whole
   deck; paper (A4 or Letter; the first time, Letter in the US, Canada and a few other countries, else A4); cut marks
