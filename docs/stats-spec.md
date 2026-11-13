@@ -39,8 +39,10 @@ These terms are used the same way in every section below.
 
 - **Card count:** physical copies you own. Three copies of Hedge Fund count as 3. Alt-art copies count like any
   other copy.
-- **Printed proxies:** cards marked as printed in a deck. They are never part of your collection, so they are left
-  out of every count except *Proxies* (in section 3).
+- **Printed proxies:** printed copies held by one deck, as decks saved by earlier versions recorded them. They are
+  never part of your collection, so they are left out of every count except *Proxies* (in section 3). Cards printed
+  now are added to the collection when their print job is marked done, and count like any other copy. Cards still in
+  the print queue aren't owned and count nowhere, except that *Short for saved decks* doesn't ask for them again.
 - **Playset:** a title's deck limit (`deck_limit` from NetrunnerDB). That's usually 3, and 1 for identities and
   "limit 1 per deck" cards.
 - **Set:** one product as listed in *Add by set*: a data pack, deluxe, big box or core set. Sets are grouped by
@@ -114,8 +116,7 @@ This answers "how much of my collection is tied up in decks?".
   with the deck's faction colour and name. Tapping one opens the deck.
 - **Short for saved decks:** the copies you'd need to print to build every unbuilt deck from free cards. This is
   a sum of each deck's *Print list* that doesn't double-count the same title. Tapping it opens the list as text
-  to copy (`3x Title` lines), with a link to each short deck's proxy sheet. Printed copies are recorded per deck,
-  so there is no one proxy sheet for all of them.
+  to copy (`3x Title` lines), with a link to each short deck's proxy sheet.
 
 ### 4. By faction
 

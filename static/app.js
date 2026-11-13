@@ -7,6 +7,9 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
   .replace(/[’‘`]/g, "'").replace(/[“”]/g, '"').toLowerCase().replace(/\s+/g, ' ').trim();
+// A looser key, only for matching names typed or pasted: no ™ or punctuation, ₂ read as 2. Card keys stay norm():
+// backups hold deck proxies by them.
+const loose = s => norm(String(s ?? '').replace(/[™®©]/g, '').normalize('NFKD')).replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim();
 const plural = (n, w, ws = w + 's') => `${n} ${n === 1 ? w : ws}`;
 const uid = () => Math.random().toString(36).slice(2, 10);
 const sel = key => `[data-key="${CSS.escape(key)}"]`;
@@ -38,7 +41,7 @@ const fname = f => (FACTIONS[f] || [f])[0];
 
 /* ---------- NetrunnerDB data ---------- */
 
-const DB = { titles: new Map(), titleList: [], byCode: new Map(), packs: [], packByCode: new Map(), cycles: new Map(), tpl: '' };
+const DB = { titles: new Map(), loose: new Map(), titleList: [], byCode: new Map(), packs: [], packByCode: new Map(), cycles: new Map(), tpl: '' };
 
 // NetrunnerDB data goes into the page, so it is checked as it's loaded: codes are letters, digits and dashes
 // (they go into attributes, links and class names as they are), numbers are numbers, and the image template
@@ -86,6 +89,11 @@ function loadDB(raw) {
     t.search = t.nameKey + ' ' + norm([c.stripped_text, c.keywords].join(' '));
   }
   DB.titleList = [...DB.titles.values()].sort((a, b) => a.title.localeCompare(b.title));
+  // Names by loose key, for lists that spell a name differently ("Blueberry! Diesel", "Paule's Café", "O2 Shortage").
+  // A loose key two titles share matches neither.
+  DB.loose = new Map();
+  const alias = (k, t) => { if (k) { const x = DB.loose.get(k); DB.loose.set(k, x && x !== t ? null : t); } };
+  for (const t of DB.titles.values()) for (const p of t.printings) { alias(loose(p.title), t); alias(loose(p.stripped_title), t); }
   const note = $('#db-note');
   if (note) note.textContent = `${DB.byCode.size} printings · ${DB.packs.length} products · fetched ${(DB.fetched || '').slice(0, 10)}`;
 }
@@ -182,6 +190,19 @@ function migrate(s) {
     if (typeof d.source === 'string' && /^https:\/\/netrunnerdb\.com\/[\w/-]*$/i.test(d.source)) deck.source = d.source;
     if (isoDate(d.created)) deck.created = d.created;
     out.decks.push(deck);
+  }
+  // Print jobs: PDFs made but not yet marked printed. { id, created, title, cards: { printing code: copies }, decks: [deck id] }.
+  // Added after version 2 came out; an older version of the app leaves it out of a restore.
+  const jobIds = new Set();
+  for (const j of Array.isArray(s.printQueue) ? s.printQueue.slice(0, 200) : []) {
+    if (!isObj(j)) continue;
+    const job = { id: typeof j.id === 'string' && /^[\w-]{1,64}$/.test(j.id) && !jobIds.has(j.id) ? j.id : uid(),
+      created: isoDate(j.created) ? j.created : new Date().toISOString(), title: str(j.title).slice(0, 200), cards: {}, decks: [] };
+    for (const [code, q] of ownEntries(j.cards)) if (count(q)) job.cards[code] = count(q);
+    for (const id of Array.isArray(j.decks) ? j.decks : []) if (typeof id === 'string' && /^[\w-]{1,64}$/.test(id)) job.decks.push(id);
+    if (!Object.keys(job.cards).length) continue;
+    jobIds.add(job.id);
+    (out.printQueue ||= []).push(job);
   }
   for (const [code, v] of ownEntries(s.packStatus)) if (v === 'partial' || v === 'done') out.packStatus[code] = v;
   if (s.locked === true) out.locked = true;
@@ -350,19 +371,22 @@ function computeLocks() {
 
 const lockedQty = (locks, key, exclude) => (locks.get(key) || []).reduce((a, l) => a + (l.deck === exclude ? 0 : l.qty), 0);
 
-// For each card in the deck: how many come from free cards, how many from other built decks, how many must be printed.
-function planDeck(deck, locks = computeLocks()) {
+// For each card in the deck: how many come from free cards, how many are in the print queue, how many from other
+// built decks, and how many must still be printed. Queued copies aren't owned yet, so a deck waiting for them can't be
+// built, but they aren't asked for again; like owned ones, every deck can count on them.
+function planDeck(deck, locks = computeLocks(), queued = queuedByTitle()) {
   const rows = [];
-  const sum = { size: 0, have: 0, borrow: 0, print: 0, proxies: 0, decks: new Map(), printList: [] };
+  const sum = { size: 0, have: 0, borrow: 0, print: 0, printing: 0, proxies: 0, decks: new Map(), printList: [] };
   for (const e of deckEntries(deck)) {
     const t = DB.titles.get(e.key);
-    const owned = titleOwned(e.key);
+    const owned = titleOwned(e.key), inQueue = queued.get(e.key) || 0;
     const need = e.qty - e.proxies;
     const others = (locks.get(e.key) || []).filter(l => l.deck !== deck);
     const elsewhere = others.reduce((a, l) => a + l.qty, 0);
     const have = Math.min(need, Math.max(0, owned - elsewhere));
-    const print = need - Math.min(need, owned);
-    let left = need - have - print;
+    const printing = Math.min(need - have, inQueue);
+    const print = Math.min(need - have - printing, Math.max(0, need - owned - inQueue));
+    let left = need - have - printing - print;
     const borrow = [];
     for (const l of others) {
       if (left <= 0) break;
@@ -371,16 +395,18 @@ function planDeck(deck, locks = computeLocks()) {
       sum.decks.set(l.deck, (sum.decks.get(l.deck) || 0) + n);
       left -= n;
     }
-    const borrowN = need - have - print;
-    rows.push({ ...e, t, owned, need, have, borrow, borrowN, print });
+    const borrowN = need - have - printing - print;
+    rows.push({ ...e, t, owned, need, have, borrow, borrowN, print, printing });
     if (t.type !== 'identity') sum.size += e.qty;
-    sum.have += have; sum.borrow += borrowN; sum.print += print; sum.proxies += e.proxies;
+    sum.have += have; sum.borrow += borrowN; sum.print += print; sum.printing += printing; sum.proxies += e.proxies;
     if (print) sum.printList.push({ t, n: print });
   }
-  sum.status = sum.print ? 'print' : sum.borrow ? 'borrow' : 'ok';
+  sum.status = sum.print ? 'print' : sum.printing ? 'printing' : sum.borrow ? 'borrow' : 'ok';
   return { rows, sum };
 }
 
+// A deck's name for display: a deck can have none (cleared, or saved from an unnamed NetrunnerDB list).
+const deckName = d => String(d.name ?? '').trim() || 'Untitled deck';
 const deckIdentity = deck => deckEntries(deck).map(e => DB.titles.get(e.key)).find(t => t.type === 'identity');
 function deckSide(deck) {
   const id = deckIdentity(deck);
@@ -412,9 +438,10 @@ function deckText(deck) {
 const NRDB_URL = /netrunnerdb\.com\/(?:[a-z]{2}\/)?(decklist|deck\/view)\/([A-Za-z0-9-]+)/i;
 
 function matchTitle(s) {
-  let k = norm(s), t = DB.titles.get(k);
+  const find = k => DB.titles.get(k) || DB.loose.get(loose(k)) || undefined;
+  let k = norm(s), t = find(k);
   const tail = /\s*[([][^)\]]*[)\]]\s*$/;
-  while (!t && tail.test(k)) { k = k.replace(tail, ''); t = DB.titles.get(k); }
+  while (!t && tail.test(k)) { k = k.replace(tail, ''); t = find(k); }
   return t;
 }
 
@@ -434,10 +461,15 @@ function parseDeckText(text) {
     if (line.length > 300) { unknown.push(line.slice(0, 60) + '…'); continue; }
     // Checked on the whole line: summary lines start with a number too ("15 influence spent", "45 cards (min 45)").
     const header = isHeader(line);
-    let qty = 1, m, counted = false;
-    if ((m = line.match(/^(\d+)\s*[x×]?\s+(.+)$/i))) { qty = +m[1]; line = m[2]; counted = true; }
-    else if ((m = line.match(/^(.+?)\s+[x×]\s*(\d+)$/i))) { qty = +m[2]; line = m[1]; counted = true; }
-    const t = matchTitle(line);
+    // The whole line is tried as a title first: some start with a number ("15 Minutes"). Then a count before or
+    // after it ("3x Hedge Fund", "Hedge Fund x3"), preferring the reading that names a card ("15 Minutes x2").
+    let t = matchTitle(line), qty = 1, counted = false;
+    if (!t) {
+      const reads = [[/^(\d+)\s*[x×]?\s+(.+)$/i, 1, 2], [/^(.+?)\s+[x×]\s*(\d+)$/i, 2, 1]]
+        .map(([re, q, n]) => { const m = line.match(re); return m && { qty: +m[q], line: m[n] }; }).filter(Boolean);
+      const r = reads.find(x => matchTitle(x.line)) || reads[0];
+      if (r) { qty = r.qty; line = r.line; counted = true; t = matchTitle(line); }
+    }
     if (t) {
       cards[t.newest.code] = clampCount((cards[t.newest.code] || 0) + qty);
     } else if (header) {
@@ -484,6 +516,9 @@ const UI = {
   stats: Object.assign({ side: '', hideRotated: false, sort: 'release', hideUnowned: true }, store.get('stats', {})),
   statsAll: {}, // shopping lists opened with Show all (this visit only)
   only: null, // { label, keys }: a Stats tap limiting the Collection list to some titles; cleared on leaving it
+  // Print cards for several decks: the decks picked (none at first, this visit only), which cards, and whether
+  // each deck starts a new page (both remembered).
+  print: Object.assign({ ids: new Set(), mode: 'missing', split: false }, store.get('printDecks', {}), { ids: new Set() }),
 };
 
 function route() {
@@ -499,7 +534,8 @@ function route() {
 }
 
 // Actions that change what you own. A locked collection refuses them; decks can still be built and edited.
-const LOCKED_ACTS = new Set(['print-n', 'alt', 'pack-box', 'pack-clear', 'add-list-open', 'add-list', 'w-finish', 'restore']);
+const LOCKED_ACTS = new Set(['print-n', 'alt', 'pack-box', 'pack-clear', 'add-list-open', 'add-list', 'w-finish', 'restore',
+  'pq-done']);
 const lockNote = '<p class="lock-note">Collection is locked, so counts can\'t be changed. Use the lock at the top to unlock it.</p>';
 const LOCK_SVG = {
   true: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
@@ -514,13 +550,14 @@ function render() {
   btn.setAttribute('aria-label', btn.title);
   btn.setAttribute('aria-pressed', locked);
   $('#menu-publisher').innerHTML = publisherSeg();
+  renderPrintMenu();
   backupNote();
   // Pages opened from another one light up its tab: a deck and Find under Decks, Add by set under Collection.
-  const parent = { deck: 'decks', find: 'decks', proxies: 'decks', sets: 'collection' }[UI.view] || UI.view;
+  const parent = { deck: 'decks', find: 'decks', proxies: 'decks', print: 'decks', sets: 'collection' }[UI.view] || UI.view;
   for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === parent);
   const app = $('#app');
   FIND.scored = null; // the collection or decks may have changed
-  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats, find: viewFind, proxies: viewProxies };
+  const views = { welcome: viewWelcome, collection: viewCollection, sets: viewSets, decks: viewDecks, deck: viewDeck, stats: viewStats, find: viewFind, proxies: viewProxies, print: viewPrintDecks };
   (views[UI.view] || viewCollection)(app);
   renderModal();
 }
@@ -568,7 +605,7 @@ function viewWelcome(app) {
             <h3>${setIcon(cy?.code)}${esc(cy?.name || 'Other')}${cy?.rotated ? ' <span class="tag">rotated</span>' : ''}</h3>
             ${packs.map(p => `
               <div class="w-pack ${W.complete[p.code] ? 'has' : ''} ${W.partial[p.code] ? 'some' : ''}">
-                <span class="w-name">${esc(p.name)} <small>${p.cards.length} cards · ${(p.date_release || '').slice(0, 4)}</small></span>
+                <span class="w-name">${esc(p.name)} <small>${p.cards.length} cards · ${releaseYear(p)}</small></span>
                 ${stepper('w-complete', `data-pack="${p.code}"`, W.complete[p.code] || 0)}
                 <label class="w-some"><input type="checkbox" data-act="w-partial" data-pack="${p.code}" ${W.partial[p.code] ? 'checked' : ''}> Some</label>
               </div>`).join('')}
@@ -636,15 +673,21 @@ async function finishWelcome() {
   else location.hash = '#collection';
 }
 
-// Deck links each count as one input; pasted text is split on blank lines between lists.
+// Deck links each count as one input. Pasted text is split where another list starts: after a blank line, a line
+// that is no card, no count and no heading is that list's name. (Blank lines alone also sit between the sections
+// of one list.) Each list's name is then read as a name, not reported as an unrecognised card.
 function splitDeckInputs(text) {
   const out = [];
-  let buf = [];
+  let buf = [], blank = false;
+  const end = () => { if (buf.join('').trim()) out.push(buf.join('\n')); buf = []; };
   for (const line of text.split(/\r?\n/)) {
     if (NRDB_URL.test(line)) { out.push(line.trim()); continue; }
+    const s = line.replace(/[●•○◦★☆]/g, '').trim();
+    if (blank && s && buf.join('').trim() && !/^\d+\s*[x×]?\s+|\s[x×]\s*\d+$/i.test(s) && !isHeader(s) && !matchTitle(s)) end();
+    blank = !s;
     buf.push(line);
   }
-  if (buf.join('').trim()) out.push(buf.join('\n'));
+  end();
   return out;
 }
 
@@ -653,6 +696,9 @@ function publisherSeg() {
   return `<span class="seg">${[['all', 'All'], ['nsg', 'Null Signal only'], ['ffg', 'FFG only']]
     .map(([v, l]) => `<button class="${cur === v ? 'on' : ''}" data-act="publisher" data-v="${v}">${l}</button>`).join('')}</span>`;
 }
+
+// A product's release year, escaped: NetrunnerDB's date_release is not checked when the data loads.
+const releaseYear = p => esc(String(p.date_release ?? '').slice(0, 4));
 
 function groupByCycle(packs) {
   const m = new Map();
@@ -901,7 +947,7 @@ function productRow(p) {
   return `<div class="prod-row ${PACK_STATES[packState(p)][1]}" data-pack="${p.code}">
     <span class="sdot"></span>
     <span class="prod-name"><a href="javascript:" data-act="pack-cards" data-v="${p.code}" title="Show its cards in the Collection list">${esc(p.name)}</a>
-      <small>${plural(p.cards.length, 'card')} · ${esc((p.date_release || '').slice(0, 4))}</small></span>
+      <small>${plural(p.cards.length, 'card')} · ${releaseYear(p)}</small></span>
     <span class="prod-state">${state}${missing}</span>
     <span class="stepper"><button data-act="pack-box" data-v="${p.code}" data-d="-1" aria-label="Remove a box" title="Remove one box's worth of every card">−</button><span class="n">${boxes}</span><button data-act="pack-box" data-v="${p.code}" data-d="1" aria-label="Add a box" title="Add one box's worth of every card">+</button></span>
     <button class="prod-clear ${boxes || have ? '' : 'idle'}" data-act="pack-clear" data-v="${p.code}" title="Set every card of this product to 0">Clear</button>
@@ -917,7 +963,7 @@ function removalWarnings(next) {
     if (o.n > n) drop.set(c.key, (drop.get(c.key) || 0) + o.n - n);
     if (o.custom > n) alt += o.custom - n;
   }
-  for (const [key, d] of drop) if (titleOwned(key) - d < lockedQty(locks, key)) for (const l of locks.get(key)) decks.add(l.deck.name || 'Untitled deck');
+  for (const [key, d] of drop) if (titleOwned(key) - d < lockedQty(locks, key)) for (const l of locks.get(key)) decks.add(deckName(l.deck));
   return [decks.size && `Built decks will be short of cards: ${[...decks].join(', ')}.`, alt && `${plural(alt, 'alt-art copy', 'alt-art copies')} will be removed too.`].filter(Boolean);
 }
 
@@ -962,22 +1008,25 @@ function onListKey(e) {
 
 function statusText(sum, built) {
   if (built && sum.status !== 'ok') {
-    const n = sum.borrow + sum.print;
+    const n = sum.borrow + sum.print + sum.printing;
     return `Built, but ${n} ${n === 1 ? 'card is' : 'cards are'} short: ` +
-      [sum.print && `${sum.print} not owned`, sum.borrow && `${sum.borrow} also in ${[...sum.decks.keys()].map(d => esc(d.name)).join(', ')}`].filter(Boolean).join(', ') + '.';
+      [sum.print && `${sum.print} not owned`, sum.printing && `${sum.printing} being printed`,
+        sum.borrow && `${sum.borrow} also in ${[...sum.decks.keys()].map(d => esc(deckName(d))).join(', ')}`].filter(Boolean).join(', ') + '.';
   }
   if (built) return `Built: ${plural(sum.have, 'card')} borrowed from your collection${sum.proxies ? `, ${sum.proxies} printed` : ''}.`;
   if (sum.status === 'ok') return `Ready to build from free cards${sum.proxies ? ` (plus ${sum.proxies} printed)` : ''}.`;
   const parts = [];
-  if (sum.borrow) parts.push(`take ${sum.borrow} from ${[...sum.decks.keys()].map(d => esc(d.name)).join(', ')}`);
+  if (sum.borrow) parts.push(`take ${sum.borrow} from ${[...sum.decks.keys()].map(d => esc(deckName(d))).join(', ')}`);
   if (sum.print) parts.push(`print ${sum.print}`);
+  if (sum.printing) parts.push(`wait for ${sum.printing} being printed (mark the print job done with the printer button at the top)`);
   return 'To build: ' + parts.join(' and ') + '.';
 }
 
 function deckBadge(sum, built) {
   if (built) return `<span class="pill built">Built</span>${sum.status !== 'ok' ? ' <span class="pill print">Conflict</span>' : ''}`;
   return sum.status === 'ok' ? '<span class="pill ok">Buildable</span>'
-    : `${sum.borrow ? `<span class="pill borrow">${sum.borrow} in other decks</span>` : ''} ${sum.print ? `<span class="pill print">${sum.print} to print</span>` : ''}`;
+    : [sum.borrow && `<span class="pill borrow">${sum.borrow} in other decks</span>`, sum.printing && `<span class="pill printing">${sum.printing} printing</span>`,
+      sum.print && `<span class="pill print">${sum.print} to print</span>`].filter(Boolean).join(' ');
 }
 
 // Sub-tabs of the Decks page: your own decks, and decklists published on NetrunnerDB.
@@ -1003,7 +1052,10 @@ function viewDecks(app) {
       <div id="check-out">${C.error ? `<p class="error">${esc(C.error)}</p>` : C.result ? checkResult(C.result, locks) : ''}</div>
     </section>
     <section>
-      <h2>Your decks <span class="muted">${S.decks.length ? `· ${built.length} built, holding ${[...locks.values()].flat().reduce((a, l) => a + l.qty, 0)} cards` : ''}</span></h2>
+      <div class="decks-head">
+        <h2>Your decks <span class="muted">${S.decks.length ? `· ${built.length} built, holding ${[...locks.values()].flat().reduce((a, l) => a + l.qty, 0)} cards` : ''}</span></h2>
+        ${S.decks.length ? '<button data-act="print-open">Print cards for several decks</button>' : ''}
+      </div>
       ${S.decks.length ? `<div class="deck-grid">${S.decks.map(d => deckCard(d, locks)).join('')}</div>`
         : '<p class="empty">No decks yet. Check a list above and save it, or start an empty deck.</p>'}
     </section>
@@ -1012,7 +1064,7 @@ function viewDecks(app) {
 
 function checkResult(deck, locks) {
   const { rows, sum } = planDeck(deck, locks);
-  const problems = rows.filter(r => r.print || r.borrowN);
+  const problems = rows.filter(r => r.print || r.printing || r.borrowN);
   return `
     <div class="banner ${sum.status}">${esc(deck.name || 'Deck')}: ${plural(sum.size, 'card')} · ${statusText(sum, false)}</div>
     ${problems.length ? `<table class="list compact"><tbody>${problems.map(r => planRow(r, null)).join('')}</tbody></table>` : ''}
@@ -1025,7 +1077,7 @@ function deckCard(d, locks) {
   return `<a class="deck-card ${d.built ? 'is-built' : ''}" href="#deck/${d.id}" style="--fc:${id ? fcolor(id.faction) : '#888'}">
     <div class="deck-id">${id ? cardImg(id.newest.code, id.title, 'small') : '<span class="ph">No identity</span>'}</div>
     <div class="deck-info">
-      <b>${esc(d.name || 'Untitled deck')}</b>
+      <b>${esc(deckName(d))}</b>
       <span class="muted">${id ? esc(id.title) : ''}</span>
       <span class="muted">${plural(sum.size, 'card')}</span>
       <span>${deckBadge(sum, d.built)}</span>
@@ -1037,9 +1089,10 @@ function planRow(r, deck) {
   const t = r.t;
   const status = [];
   if (r.print) status.push(`<span class="st print">print ${r.print}</span>`);
-  for (const b of r.borrow) status.push(`<span class="st borrow">take ${b.n} of the ${b.has} in <a href="#deck/${b.deck.id}">${esc(b.deck.name)}</a></span>`);
+  if (r.printing) status.push(`<span class="st printing">${r.printing} printing</span>`);
+  for (const b of r.borrow) status.push(`<span class="st borrow">take ${b.n} of the ${b.has} in <a href="#deck/${b.deck.id}">${esc(deckName(b.deck))}</a></span>`);
   if (r.proxies) status.push(`<span class="st proxy">${r.proxies} printed${deck ? ` <button class="x" data-act="unproxy" data-key="${esc(r.key)}" title="Stop counting as printed">×</button>` : ''}</span>`);
-  if (!r.print && !r.borrowN) status.push('<span class="st ok">✓</span>');
+  if (!r.print && !r.printing && !r.borrowN) status.push('<span class="st ok">✓</span>');
   return `<tr data-key="${esc(r.key)}">
     <td class="q">${deck ? stepper('deck-q', `data-key="${esc(r.key)}"`, r.qty) : r.qty + '×'}</td>
     <td><span class="dot" style="--fc:${fcolor(t.faction)}"></span><a href="javascript:" data-act="card" data-key="${esc(r.key)}">${esc(t.title)}</a></td>
@@ -1065,12 +1118,13 @@ function viewDeck(app) {
           ${deck.source ? ` · <a href="${esc(deck.source)}" target="_blank" rel="noopener">source</a>` : ''}</div>
         <div class="banner ${deck.built ? (sum.status === 'ok' ? 'built' : 'print') : sum.status}">${statusText(sum, deck.built)}</div>
         <div class="row">
-          ${deck.built
-            ? '<button class="primary" data-act="deck-unbuild">Deconstruct (return cards)</button>'
-            : `<button class="primary" data-act="deck-build">${sum.status === 'ok' ? 'Build it (borrow cards)' : sum.print ? 'Build with printed cards…' : 'Take apart other decks and build…'}</button>`}
-          ${!deck.built ? [...sum.decks.entries()].map(([d, n]) => `<button data-act="deck-unbuild" data-id="${d.id}">Deconstruct ${esc(d.name)} <span class="muted">(has ${n} you need)</span></button>`).join('') : ''}
+          ${deck.built ? '<button class="primary" data-act="deck-unbuild">Deconstruct (return cards)</button>'
+            : sum.print ? `<button class="primary" data-act="proxy-open">Print cards (${sum.print})</button>`
+            : sum.printing ? '<button class="primary" disabled title="Waiting for cards being printed">Build it</button>'
+            : `<button class="primary" data-act="deck-build">${sum.status === 'ok' ? 'Build it (borrow cards)' : 'Take apart other decks and build…'}</button>`}
+          ${!deck.built ? [...sum.decks.entries()].map(([d, n]) => `<button data-act="deck-unbuild" data-id="${d.id}">Deconstruct ${esc(deckName(d))} <span class="muted">(has ${n} you need)</span></button>`).join('') : ''}
           ${sum.print ? `<button data-act="show-print">Print list (${sum.print})</button>` : ''}
-          <button data-act="proxy-open">Proxy sheet</button>
+          ${!deck.built && sum.print ? '' : '<button data-act="proxy-open">Print cards</button>'}
           <button data-act="copy-deck">Deck list</button>
           <button class="danger" data-act="deck-delete">Delete</button>
         </div>
@@ -1108,8 +1162,12 @@ const XLARGE = 'https://card-images.netrunnerdb.com/v2/xlarge/';
 // Faces printed after a card's front, as on NetrunnerDB (multi_side_cards in pnp.js): Hoshiko, Earth Station, Dewi
 // and Nebula have a back; Méliès U prints three fronts and three backs. Keyed by printing code.
 const EXTRA_FACES = { 26066: ['-0'], 26120: ['-0'], 35023: ['-0'], 35057: ['-0'], 36036: ['', '', '-0', '-1', '-2'] };
-// The PDF being made or last made: { deckId, items, ids, opts, file, got: Map(id → image), state, … }.
+// The PDF being made or last made: { key, items, ids, opts, file, got: Map(id → image), state, … }.
+// key: the deck's id for one deck's sheet, MULTI for the sheet of several decks.
 const PDF = { job: null, url: '' };
+const MULTI = '*decks';
+// The proxy sheet on screen, if any: its PDF job key.
+const pdfKey = () => UI.view === 'proxies' ? UI.arg : UI.view === 'print' ? MULTI : null;
 
 function proxyList(deck, mode) {
   const { rows } = planDeck(deck);
@@ -1130,9 +1188,10 @@ function proxyImages(list) {
   for (const x of list) {
     const codes = nsgPrintings(x.t).map(p => p.code);
     if (!codes.length) continue;
-    for (const face of ['', ...(EXTRA_FACES[codes[0]] || [])]) {
-      for (let i = 0; i < x.n; i++) out.push({ t: x.t, id: codes[0] + face, codes, face });
-    }
+    // main: the image that stands for the card itself, once per copy (Méliès U prints three fronts per copy).
+    ['', ...(EXTRA_FACES[codes[0]] || [])].forEach((face, f) => {
+      for (let i = 0; i < x.n; i++) out.push({ t: x.t, id: codes[0] + face, codes, face, main: !f });
+    });
   }
   return out;
 }
@@ -1145,20 +1204,20 @@ function pdfOpts() {
   return { format: pick('format', LETTER_REGIONS.has(region) ? 'letter' : 'a4'), cuts: pick('cuts', 'lines'), bleed: pick('bleed', '0') };
 }
 
-const proxyMode = deck => PROXY_MODES.some(([v]) => v === UI.proxyMode) ? UI.proxyMode : planDeck(deck).sum.print ? 'missing' : 'all';
+const proxyMode = deck => PROXY_MODES.some(([v]) => v === UI.proxyMode) ? UI.proxyMode : (s => s.print || s.printing ? 'missing' : 'all')(planDeck(deck).sum);
 const pdfBusy = job => job && (job.state === 'loading' || job.state === 'building');
 const faceName = x => x.t.title + (x.id.includes('-') ? ' (back)' : '');
 
-function pdfButton(deck, n, pages) {
+function pdfButton(key, n, pages) {
   const job = PDF.job;
-  if (job?.deckId === deck.id && job.state === 'loading') return `Loading images ${job.got.size}/${job.ids.length}`;
-  if (job?.deckId === deck.id && job.state === 'building') return 'Making the PDF…';
+  if (job?.key === key && job.state === 'loading') return `Loading images ${job.got.size}/${job.ids.length}`;
+  if (job?.key === key && job.state === 'building') return 'Making the PDF…';
   return `Download PDF <span class="n">${plural(n, 'card')}${pages ? ', ' + plural(pages, 'page') : ''}</span>`;
 }
 
-function pdfStatus(deck) {
+function pdfStatus(key) {
   const job = PDF.job;
-  if (!job || job.deckId !== deck.id) return '';
+  if (!job || job.key !== key) return '';
   const names = ids => [...new Set(job.items.filter(x => ids.includes(x.id)).map(faceName))].map(esc).join(', ');
   if (job.state === 'missing') {
     return `<div class="banner print"><b>${plural(job.missing.length, 'card image')} could not be loaded</b>: ${names(job.missing)}.
@@ -1172,7 +1231,8 @@ function pdfStatus(deck) {
     const low = job.low.length ? `<br><span class="muted">Less sharp, as NetrunnerDB only has a small image of their printing
       (System Core 2019 or System Update 2021): ${names(job.low)}.</span>` : '';
     return `<p class="pdf-done">Saved <b>${esc(job.file)}</b> (${plural(job.pages, 'page')}, ${(job.size / 1048576).toFixed(1)} MB).
-      <a href="${PDF.url}" target="_blank" rel="noopener">Open it in a new tab</a>${left}${low}</p>`;
+      <a href="${PDF.url}" target="_blank" rel="noopener">Open it in a new tab</a>
+      <br>${job.queued ? 'Added to the print queue' : 'Already in the print queue'}: once printed, mark it done with the printer button at the top.${left}${low}</p>`;
   }
   return '';
 }
@@ -1184,7 +1244,7 @@ function viewProxies(app) {
   const ffg = list.filter(x => !nsgPrinting(x.t)), ffgCopies = ffg.reduce((a, x) => a + x.n, 0);
   const images = proxyImages(list), n = list.reduce((a, x) => a + (nsgPrinting(x.t) ? x.n : 0), 0);
   const pages = Math.ceil(images.length / 9), o = pdfOpts();
-  const busy = pdfBusy(PDF.job) && PDF.job.deckId === deck.id, dis = busy ? 'disabled' : '';
+  const busy = pdfBusy(PDF.job) && PDF.job.key === deck.id, dis = busy ? 'disabled' : '';
   const seg = k => `<span class="seg small">${PDF_OPTS[k][1].map(([v, l]) =>
     `<button class="${o[k] === v ? 'on' : ''}" data-act="pdf-opt" data-k="${k}" data-v="${v}" ${dis}>${l}</button>`).join('')}</span>`;
   const faces = images.length - n;
@@ -1196,32 +1256,125 @@ function viewProxies(app) {
   app.innerHTML = `
   <div class="proxy-page">
     <div class="proxy-tools">
-      <a href="#deck/${deck.id}" class="back">← ${esc(deck.name || 'Deck')}</a>
-      <h1>Proxy sheet</h1>
+      <a href="#deck/${deck.id}" class="back">← ${esc(deckName(deck))}</a>
+      <h1>Print cards</h1>
       <p class="muted">A PDF of card images at real size (63.5 × 88.9 mm), nine to a page, like NetrunnerDB's print-and-play.
         Print it at 100% ("Actual size", not "Fit to page"), then cut along the marks. Only Null Signal Games cards are printed.</p>
+      <p class="muted">${QUEUE_NOTE}</p>
       <div class="row"><span class="seg">${PROXY_MODES.map(([v, l]) => `<button class="${mode === v ? 'on' : ''}" data-act="proxy-mode" data-v="${v}" ${dis}>${l}</button>`).join('')}</span></div>
       <div class="pdf-opts">${Object.keys(PDF_OPTS).map(k => `<span class="pdf-opt"><span class="muted">${PDF_OPTS[k][0]}</span>${seg(k)}</span>`).join('')}</div>
       <p class="muted small">Bleed leaves a gap between cards (narrow 3 mm, wide 6 mm); the cards shrink a little to make room.</p>
       <div class="row">
-        <button class="primary" id="pdf-btn" data-act="proxy-pdf" ${n && !busy ? '' : 'disabled'}>${pdfButton(deck, n, pages)}</button>
-        ${mode === 'missing' && n ? '<button data-act="proxy-printed">I printed them</button>' : ''}
+        <button class="primary" id="pdf-btn" data-act="proxy-pdf" ${n && !busy ? '' : 'disabled'}>${pdfButton(deck.id, n, pages)}</button>
       </div>
       ${faces > 0 ? `<p class="muted small">Includes ${plural(faces, 'extra face')} of double-faced cards: ${plural(images.length, 'image')} in all.</p>` : ''}
-      <div id="pdf-status">${pdfStatus(deck)}</div>
+      <div id="pdf-status">${pdfStatus(deck.id)}</div>
     </div>
     ${ffg.length ? `<div class="banner print ffg-note"><b>${plural(ffg.length, 'card')} can't be printed</b>${ffgCopies > ffg.length ? ` (${ffgCopies} copies)` : ''}: ${ffg.length === 1 ? 'it was' : 'they were'}
       only published by Fantasy Flight Games, and only Null Signal Games cards may be printed. Not in the PDF:
       ${ffg.map(x => `${x.n}× ${esc(x.t.title)}`).join(', ')}.</div>` : ''}
     ${list.length ? `<div class="proxy-sheet">${preview}</div>`
-      : `<p class="empty">${mode === 'all' ? 'This deck has no cards yet.' : 'Nothing to print: you have every card for this deck.'}</p>`}
+      : `<p class="empty">${mode === 'all' ? 'This deck has no cards yet.' : planDeck(deck).sum.printing
+        ? 'Nothing left to print: the rest is in the print queue.' : 'Nothing to print: you have every card for this deck.'}</p>`}
+  </div>`;
+}
+
+const QUEUE_NOTE = `Each PDF you download goes into the print queue (the printer button at the top). Once it's printed, mark it
+  done there to add its cards to your collection. Cards already in the queue aren't printed again, except with Whole deck.`;
+
+const safeFileName = s => String(s ?? '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+const savePrintOpts = () => store.set('printDecks', { mode: UI.print.mode, split: UI.print.split });
+
+// The sheet for several decks: each deck picked (in the order of Your decks) with its cards for the mode, as on its
+// own proxy sheet, one deck after another. With split, each deck starts a new page.
+function printSheet() {
+  const P = UI.print;
+  const mode = PROXY_MODES.some(([v]) => v === P.mode) ? P.mode : 'missing';
+  const decks = S.decks.filter(d => P.ids.has(d.id));
+  const parts = decks.map(deck => {
+    const list = proxyList(deck, mode);
+    const images = proxyImages(list).map((x, i) => i || !P.split ? x : { ...x, newPage: true });
+    return { deck, list, images, ffg: list.filter(x => !nsgPrinting(x.t)), n: list.reduce((a, x) => a + (nsgPrinting(x.t) ? x.n : 0), 0) };
+  });
+  const images = parts.flatMap(p => p.images);
+  const slots = proxySlots(images);
+  return { mode, decks, parts, images, slots, n: parts.reduce((a, p) => a + p.n, 0),
+    pages: slots.length ? Math.floor(slots[slots.length - 1].k / 9) + 1 : 0 };
+}
+
+function viewPrintDecks(app) {
+  const P = UI.print, { mode, decks, parts, images, slots, n, pages } = printSheet(), o = pdfOpts();
+  const busy = pdfBusy(PDF.job) && PDF.job.key === MULTI, dis = busy ? 'disabled' : '';
+  const seg = k => `<span class="seg small">${PDF_OPTS[k][1].map(([v, l]) =>
+    `<button class="${o[k] === v ? 'on' : ''}" data-act="pdf-opt" data-k="${k}" data-v="${v}" ${dis}>${l}</button>`).join('')}</span>`;
+  const faces = images.length - n;
+  const ffg = parts.flatMap(p => p.ffg.map(x => ({ ...x, deck: p.deck })));
+  // Copies per deck in the current mode, for the picker.
+  const count = d => proxyList(d, mode).reduce((a, x) => a + x.n, 0);
+  const picker = S.decks.map(d => {
+    const id = deckIdentity(d), c = count(d);
+    return `<label class="print-pick ${P.ids.has(d.id) ? 'on' : ''}">
+      <input type="checkbox" data-act="print-deck" data-id="${esc(d.id)}" ${P.ids.has(d.id) ? 'checked' : ''} ${dis}>
+      <span class="dot" style="--fc:${id ? fcolor(id.faction) : '#888'}"></span>
+      <span class="pp-name"><b>${esc(deckName(d))}</b> <span class="muted">${id ? esc(id.title) : 'No identity'}${d.built ? ' · built' : ''}</span></span>
+      <span class="pp-n ${c ? '' : 'muted'}">${c ? plural(c, 'card') : 'nothing'}</span>
+    </label>`;
+  }).join('');
+  // As on one deck's sheet, plus a heading where each deck starts.
+  let s = 0;
+  const preview = parts.map(p => {
+    if (!p.images.length && !p.ffg.length) return '';
+    let html = '';
+    p.images.forEach((x, i) => {
+      const { k } = slots[s++];
+      if (k && k % 9 === 0) html += `<div class="proxy-break">Page ${Math.floor(k / 9) + 1}</div>`;
+      if (!i) html += `<div class="proxy-deck">${esc(deckName(p.deck))} <span class="muted">${plural(p.n, 'card')}</span></div>`;
+      html += `<div class="proxy">${cardImg(x.id, faceName(x), 'large')}</div>`;
+    });
+    if (!p.images.length) html += `<div class="proxy-deck">${esc(deckName(p.deck))}</div>`;
+    return html + p.ffg.flatMap(x => Array(x.n).fill(`<div class="proxy ffg" title="Not in the PDF: only published by Fantasy Flight Games">
+      ${cardImg(x.t.newest.code, x.t.title, 'large')}<span class="ffg-tag">Not printed</span></div>`)).join('');
+  }).join('');
+  const empty = !S.decks.length ? 'No decks yet.' : !decks.length ? 'Pick the decks to print above.'
+    : mode === 'all' ? 'The decks picked have no cards yet.' : decks.some(d => planDeck(d).sum.printing)
+    ? 'Nothing left to print: the rest is in the print queue.' : 'Nothing to print: you have every card for the decks picked.';
+  app.innerHTML = `
+  <div class="proxy-page">
+    <div class="proxy-tools">
+      <a href="#decks" class="back">← Decks</a>
+      <h1>Print cards for several decks</h1>
+      <p class="muted">One PDF with the cards of every deck you pick, deck after deck, laid out like a single deck's Print cards.
+        Each deck counts its cards on its own, as on its own page: two decks short of the same card both print it.
+        Print it at 100% ("Actual size", not "Fit to page"), then cut along the marks. Only Null Signal Games cards are printed.</p>
+      <p class="muted">${QUEUE_NOTE}</p>
+      <div class="row"><span class="seg">${PROXY_MODES.map(([v, l]) => `<button class="${mode === v ? 'on' : ''}" data-act="print-mode" data-v="${v}" ${dis}>${l}</button>`).join('')}</span></div>
+      <div class="print-picker">
+        <div class="pp-head"><span class="muted">${decks.length ? `${decks.length} of ${plural(S.decks.length, 'deck')} picked` : 'Decks to print'}</span>
+          <button class="small" data-act="print-all" data-v="all" ${dis}>All</button><button class="small" data-act="print-all" data-v="none" ${dis}>None</button></div>
+        ${picker || '<p class="empty">No decks yet.</p>'}
+      </div>
+      <div class="pdf-opts">${Object.keys(PDF_OPTS).map(k => `<span class="pdf-opt"><span class="muted">${PDF_OPTS[k][0]}</span>${seg(k)}</span>`).join('')}
+        <span class="pdf-opt"><span class="muted">Each deck</span><span class="seg small">${[['0', 'Runs on'], ['1', 'New page']].map(([v, l]) =>
+          `<button class="${P.split === (v === '1') ? 'on' : ''}" data-act="print-split" data-v="${v}" ${dis}>${l}</button>`).join('')}</span></span></div>
+      <p class="muted small">Bleed leaves a gap between cards (narrow 3 mm, wide 6 mm); the cards shrink a little to make room.
+        New page starts each deck on a fresh page, so the decks are easy to keep apart, at the cost of some empty spots.</p>
+      <div class="row">
+        <button class="primary" id="pdf-btn" data-act="print-pdf" ${n && !busy ? '' : 'disabled'}>${pdfButton(MULTI, n, pages)}</button>
+      </div>
+      ${faces > 0 ? `<p class="muted small">Includes ${plural(faces, 'extra face')} of double-faced cards: ${plural(images.length, 'image')} in all.</p>` : ''}
+      <div id="pdf-status">${pdfStatus(MULTI)}</div>
+    </div>
+    ${ffg.length ? `<div class="banner print ffg-note"><b>${plural(ffg.length, 'card')} can't be printed</b>: only published by
+      Fantasy Flight Games, and only Null Signal Games cards may be printed. Not in the PDF:
+      ${ffg.map(x => `${x.n}× ${esc(x.t.title)} <span class="muted">(${esc(deckName(x.deck))})</span>`).join(', ')}.</div>` : ''}
+    ${preview ? `<div class="proxy-sheet">${preview}</div>` : `<p class="empty">${empty}</p>`}
   </div>`;
 }
 
 // Shows progress in the button without redrawing the page (and the preview images with it).
 function pdfProgress(job) {
-  const btn = $('#pdf-btn'), deck = currentDeck();
-  if (PDF.job === job && btn && deck?.id === job.deckId && UI.view === 'proxies') btn.textContent = pdfButton(deck);
+  const btn = $('#pdf-btn');
+  if (PDF.job === job && btn && pdfKey() === job.key) btn.textContent = pdfButton(job.key);
 }
 
 let jspdfLoad = null;
@@ -1265,13 +1418,12 @@ async function toJpeg(blob) {
   return new Uint8Array(await jpeg.arrayBuffer());
 }
 
-function startPdf() {
-  const deck = currentDeck();
-  const items = proxyImages(proxyList(deck, proxyMode(deck)));
+// key and title: see PDF. An item with newPage starts a new page, unless it already is at the top of one.
+// decks: the ids of the decks the cards are for, kept with the print job.
+function startPdf(key, items, title, file, decks) {
   if (!items.length) return;
-  const safe = (deck.name || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Deck';
-  PDF.job = { deckId: deck.id, name: deck.name, items, ids: [...new Set(items.map(x => x.id))], opts: pdfOpts(),
-    file: `${safe} proxies.pdf`, got: new Map(), skipped: [] };
+  PDF.job = { key, name: title, items, ids: [...new Set(items.map(x => x.id))], opts: pdfOpts(),
+    file, decks, got: new Map(), skipped: [] };
   loadJsPdf().catch(() => {}); // loads alongside the images; an error shows when the PDF is made
   return loadImages(PDF.job);
 }
@@ -1294,6 +1446,15 @@ async function loadImages(job) {
   job.missing = job.ids.filter(id => !job.got.has(id));
   if (job.missing.length) { job.state = 'missing'; render(); return; }
   await buildPdf(job);
+}
+
+// Each image with its place k in the PDF: page floor(k / 9), spot k % 9. An item marked newPage skips to the next page.
+function proxySlots(items) {
+  let k = 0;
+  return items.map(x => {
+    if (x.newPage && k % 9) k += 9 - k % 9;
+    return { x, k: k++ };
+  });
 }
 
 // Card size and place on the page, as NetrunnerDB lays them out: at least 6.35 mm from the paper's edge, bleed (a gap
@@ -1334,11 +1495,11 @@ async function buildPdf(job, skip = []) {
     if (PDF.job !== job) return;
     const { format, cuts, bleed } = job.opts;
     const doc = new jsPDF({ unit: 'mm', format, compress: true });
-    doc.setProperties({ title: `${job.name || 'Deck'}: proxies`, creator: 'Netrunner Collection' });
+    doc.setProperties({ title: `${job.name || 'Deck'}: cards to print`, creator: 'Netrunner Collection' });
     const pw = doc.internal.pageSize.getWidth(), ph = doc.internal.pageSize.getHeight();
     const L = proxyLayout(pw, ph, +bleed);
-    job.items.filter(x => job.got.has(x.id)).forEach((x, k) => {
-      if (k && k % 9 === 0) doc.addPage(format);
+    proxySlots(job.items.filter(x => job.got.has(x.id))).forEach(({ x, k }, i) => {
+      if (i && k % 9 === 0) doc.addPage(format);
       const col = k % 3, row = Math.floor(k % 9 / 3);
       // The alias makes the copies of a card share one embedded image.
       doc.addImage(job.got.get(x.id).data, 'JPEG', L.left + col * (L.w + L.b), L.top + row * (L.h + L.b), L.w, L.h, 'c' + x.id, 'NONE');
@@ -1351,7 +1512,9 @@ async function buildPdf(job, skip = []) {
     PDF.url = URL.createObjectURL(blob);
     job.size = blob.size;
     job.low = job.ids.filter(id => job.got.get(id)?.low);
+    job.placed = new Set(job.got.keys());
     job.got.clear(); // in the PDF now
+    job.queued = queueJob(job);
     const a = document.createElement('a');
     a.href = PDF.url;
     a.download = job.file;
@@ -1478,9 +1641,11 @@ const sxMore = (key, n) => n > STATS_TOP ? `<button class="sx-more" data-act="st
 
 function viewStats(app) {
   const o = UI.stats;
-  if (!Object.keys(S.owned).length) {
-    app.innerHTML = `<div class="sx"><h1>Stats</h1>
-      <p class="empty">Add some cards first: <a href="#sets">add whole products</a> or <a href="javascript:" data-act="add-list-open">paste a list</a>.</p></div>`;
+  const addFirst = 'Add some cards first: <a href="#sets">add whole products</a> or <a href="javascript:" data-act="add-list-open">paste a list</a>.';
+  // With decks but no cards, the deck sections still have something to say (what to print, for one).
+  const noCards = !Object.keys(S.owned).length;
+  if (noCards && !S.decks.length) {
+    app.innerHTML = `<div class="sx"><h1>Stats</h1><p class="empty">${addFirst}</p></div>`;
     return;
   }
   const s = statsFor(o);
@@ -1493,6 +1658,7 @@ function viewStats(app) {
       <label class="check"><input type="checkbox" data-stat="hideRotated" ${o.hideRotated ? 'checked' : ''}> Hide rotated</label>
       <span class="sx-pub"><span class="muted">Products</span> ${publisherSeg()}</span>
     </div>
+    ${noCards ? `<p class="muted">${addFirst}</p>` : ''}
     <div class="sx-tiles">
       ${sxTile('Cards', s.cards)}
       ${sxTile('Titles', `${s.titles} <small>/ ${s.titlesAll}</small>`, `${pct(s.titles, s.titlesAll)}% owned`)}
@@ -1561,7 +1727,7 @@ function statsDecks(s) {
       <h3>Per built deck</h3>
       ${s.deckBars.length ? `<div class="sx-bars">${s.deckBars.map(({ d, n }) => {
         const id = deckIdentity(d), c = id ? fcolor(id.faction) : '#888';
-        return `<a class="sx-row" href="#deck/${d.id}"><span class="sx-name"><span class="dot" style="--fc:${c}"></span>${esc(d.name || 'Untitled deck')}</span>
+        return `<a class="sx-row" href="#deck/${d.id}"><span class="sx-name"><span class="dot" style="--fc:${c}"></span>${esc(deckName(d))}</span>
           ${bar([{ pct: 100 * n / max, color: c }], `${plural(n, 'card')}`)}</a>`;
       }).join('')}</div>` : '<p class="muted">No built decks.</p>'}
       <h3>Short for saved decks</h3>
@@ -1773,13 +1939,13 @@ async function fetchDecklists() {
 
 // Scores every cached decklist against the collection. Recomputed when the collection or cache changes.
 function scoreDecklists() {
-  const locks = computeLocks(), rules = formatRules();
+  const locks = computeLocks(), rules = formatRules(), queued = queuedByTitle();
   return FIND.cache.decks.map(d => {
     const cards = {};
     let unknown = 0;
     for (const [code, q] of Object.entries(d.cards)) if (DB.byCode.has(code)) cards[code] = q; else unknown += q;
     const deck = { cards, proxies: {} };
-    const { sum } = planDeck(deck, locks);
+    const { sum } = planDeck(deck, locks, queued);
     const id = deckIdentity(deck);
     return { d, cards, sum, id, unknown, legal: legalIn(cards, rules), side: id?.side || deckSide(deck), search: norm(d.name + ' ' + (id?.title || '') + ' ' + d.user) };
   });
@@ -1856,7 +2022,7 @@ function findRow(r) {
   const { d, sum, id } = r;
   const short = [...sum.printList.map(p => `${p.n}× ${esc(p.t.title)}`), r.unknown ? `${r.unknown} unknown to this app's card data` : ''].filter(Boolean);
   const pills = sum.status === 'ok' && !r.unknown ? '<span class="pill ok">Buildable</span>'
-    : `${sum.borrow ? `<span class="pill borrow">${sum.borrow} in your decks</span>` : ''} ${sum.print + r.unknown ? `<span class="pill print">${sum.print + r.unknown} missing</span>` : ''}`;
+    : `${sum.borrow ? `<span class="pill borrow">${sum.borrow} in your decks</span>` : ''} ${sum.printing ? `<span class="pill printing">${sum.printing} printing</span>` : ''} ${sum.print + r.unknown ? `<span class="pill print">${sum.print + r.unknown} missing</span>` : ''}`;
   return `<div class="find-row" style="--fc:${id ? fcolor(id.faction) : '#888'}">
     <div class="deck-id">${id ? cardImg(id.newest.code, id.title, 'small') : '<span class="ph">No identity</span>'}</div>
     <div class="deck-info">
@@ -1964,7 +2130,7 @@ function renderModal() {
       }).join('')}
       </tbody></table>
       <h3>In decks</h3>
-      ${decks.length ? `<ul class="plain">${decks.map(({ d, e }) => `<li><a href="#deck/${d.id}" data-act="modal-close-nav">${esc(d.name)}</a>: ${e.qty}× ${d.built ? '<span class="pill built">Built</span>' : '<span class="muted">not built</span>'}${e.proxies ? ` (${e.proxies} printed)` : ''}</li>`).join('')}</ul>`
+      ${decks.length ? `<ul class="plain">${decks.map(({ d, e }) => `<li><a href="#deck/${d.id}" data-act="modal-close-nav">${esc(deckName(d))}</a>: ${e.qty}× ${d.built ? '<span class="pill built">Built</span>' : '<span class="muted">not built</span>'}${e.proxies ? ` (${e.proxies} printed)` : ''}</li>`).join('')}</ul>`
         : '<p class="muted">Not in any deck.</p>'}
       <p><a href="https://netrunnerdb.com/en/card/${shown.code}" target="_blank" rel="noopener">View on NetrunnerDB ↗</a></p>
     </div>
@@ -1983,7 +2149,7 @@ function refresh(key) {
     el.outerHTML = printingRow(t, DB.byCode.get(el.dataset.code), locks, span);
   }
   if ($('#stats')) $('#stats').innerHTML = `${collectionStats(locks)} <span class="muted">· showing ${UI.resultsCount}</span>`;
-  if (['deck', 'decks', 'stats', 'proxies'].includes(UI.view)) render();
+  if (['deck', 'decks', 'stats', 'proxies', 'print'].includes(UI.view)) render();
   else renderModal();
 }
 
@@ -2059,15 +2225,15 @@ const act = {
   'st-all': el => { UI.statsAll[el.dataset.v] = !UI.statsAll[el.dataset.v]; render(); },
   'st-faction': el => { const f = el.dataset.v; collectionFrom({ faction: f, side: CORP_FACTIONS.includes(f) ? 'corp' : 'runner' }); },
   'st-type': el => collectionFrom({ type: el.dataset.v, side: el.dataset.side }),
-  // A list to copy, and a link to each short deck's proxy sheet (printed copies are recorded per deck).
+  // A list to copy, and a link to each short deck's Print cards page.
   'st-short': () => {
     const short = [...statsFor(UI.stats).short.values()].filter(x => x.unbuilt)
       .sort((a, b) => TYPES.indexOf(a.t.type) - TYPES.indexOf(b.t.type) || a.t.title.localeCompare(b.t.title));
     const decks = S.decks.filter(d => !d.built && (!UI.stats.side || deckSide(d) === UI.stats.side))
       .map(d => ({ d, n: planDeck(d).sum.print })).filter(x => x.n);
-    const links = decks.map(({ d, n }) => `<a href="javascript:" data-act="proxy-deck" data-v="${d.id}">${esc(d.name || 'Untitled deck')}</a> (${n})`).join(', ');
+    const links = decks.map(({ d, n }) => `<a href="javascript:" data-act="proxy-deck" data-v="${d.id}">${esc(deckName(d))}</a> (${n})`).join(', ');
     showText('Short for saved decks', short.map(x => `${x.unbuilt}x ${x.t.title}`).join('\n'),
-      `Each card at the most copies any one unbuilt deck is short of. Proxy sheet for a deck: ${links}.`);
+      `Each card at the most copies any one unbuilt deck is short of. Print cards for a deck: ${links}.`);
   },
   'lock': () => {
     S.locked = !S.locked;
@@ -2175,13 +2341,11 @@ const act = {
   'deck-new': () => { location.hash = '#deck/' + newDeck('New deck', {}).id; },
   'deck-build': () => {
     const deck = currentDeck(), { sum } = planDeck(deck);
+    // Cards you don't own yet are printed first (Print cards); the button isn't offered then.
+    if (sum.print || sum.printing) return;
     if (sum.status !== 'ok') {
-      const msg = [];
-      if (sum.decks.size) msg.push(`Deconstruct ${[...sum.decks.keys()].map(d => d.name).join(', ')}`);
-      if (sum.print) msg.push(`count ${sum.print} missing cards as printed proxies`);
-      if (!confirm(`To build this deck: ${msg.join(' and ')}. Continue?`)) return;
+      if (!confirm(`To build this deck: deconstruct ${[...sum.decks.keys()].map(deckName).join(', ')}. Continue?`)) return;
       for (const d of sum.decks.keys()) d.built = false;
-      if (sum.print) markPrinted(deck);
     }
     deck.built = true;
     save(); render();
@@ -2190,11 +2354,11 @@ const act = {
     const deck = el.dataset.id ? S.decks.find(d => d.id === el.dataset.id) : currentDeck();
     deck.built = false;
     save(); render();
-    toast(`${deck.name} deconstructed; its cards are free again.`);
+    toast(`${deckName(deck)} deconstructed; its cards are free again.`);
   },
   'deck-delete': () => {
     const deck = currentDeck();
-    if (!confirm(`Delete ${deck.name}? Its cards return to your collection.`)) return;
+    if (!confirm(`Delete ${deckName(deck)}? Its cards return to your collection.`)) return;
     S.decks = S.decks.filter(d => d !== deck);
     save();
     location.hash = '#decks';
@@ -2207,19 +2371,33 @@ const act = {
     $('#deck-add').focus();
   },
   'unproxy': el => { const deck = currentDeck(); delete deck.proxies[el.dataset.key]; save(); render(); },
-  'mark-printed': () => { markPrinted(currentDeck()); UI.modal = null; save(); render(); toast('Missing cards are now counted as printed copies in this deck.'); },
   'show-print': () => {
     const { sum } = planDeck(currentDeck());
     showText('Cards to print', sum.printList.map(p => `${p.n}x ${p.t.title}`).join('\n'),
-      `You don't own enough of ${plural(sum.printList.length, 'card')} (${sum.print} copies). Once they're printed, mark them so this deck counts them.`,
-      `<button data-act="proxy-open">Proxy sheet</button><button data-act="mark-printed">I printed them</button>`);
+      `You don't own enough of ${plural(sum.printList.length, 'card')} (${sum.print} copies).`,
+      `<button data-act="proxy-open">Print cards</button>`);
   },
+  'pq-done': el => finishJob(el.dataset.id, true),
+  'pq-cancel': el => finishJob(el.dataset.id, false),
   'copy-deck': () => showText('Deck list', deckText(currentDeck())),
   'proxy-open': () => { UI.proxyMode = null; location.hash = '#proxies/' + currentDeck().id; },
   'proxy-deck': el => { UI.proxyMode = null; location.hash = '#proxies/' + el.dataset.v; },
   'proxy-mode': el => { UI.proxyMode = el.dataset.v; render(); },
   'pdf-opt': el => { store.set('proxyPdf', { ...pdfOpts(), [el.dataset.k]: el.dataset.v }); render(); },
-  'proxy-pdf': () => startPdf(),
+  'proxy-pdf': () => {
+    const deck = currentDeck();
+    startPdf(deck.id, proxyImages(proxyList(deck, proxyMode(deck))), deckName(deck), `${safeFileName(deck.name) || 'Deck'} cards.pdf`, [deck.id]);
+  },
+  'print-open': () => { $('#pq').open = false; location.hash = '#print'; },
+  'print-deck': el => { UI.print.ids[el.checked ? 'add' : 'delete'](el.dataset.id); render(); },
+  'print-all': el => { UI.print.ids = el.dataset.v === 'all' ? new Set(S.decks.map(d => d.id)) : new Set(); render(); },
+  'print-mode': el => { UI.print.mode = el.dataset.v; savePrintOpts(); render(); },
+  'print-split': el => { UI.print.split = el.dataset.v === '1'; savePrintOpts(); render(); },
+  'print-pdf': () => {
+    const { decks, images } = printSheet();
+    startPdf(MULTI, images, decks.length === 1 ? deckName(decks[0]) : decks.map(deckName).join(', '),
+      decks.length === 1 ? `${safeFileName(decks[0].name) || 'Deck'} cards.pdf` : `Cards for ${decks.length} decks.pdf`, decks.map(d => d.id));
+  },
   'pdf-retry': () => { if (PDF.job?.state === 'missing') loadImages(PDF.job); },
   'pdf-without': () => {
     const job = PDF.job;
@@ -2228,12 +2406,6 @@ const act = {
     else { PDF.job = null; render(); toast('No card image could be loaded, so there is nothing to put in a PDF.'); }
   },
   'pdf-cancel': () => { PDF.job = null; render(); },
-  // Only the cards the PDF can have: one only Fantasy Flight Games published is still to print.
-  'proxy-printed': () => {
-    const n = markPrinted(currentDeck(), t => !!nsgPrinting(t));
-    save(); render();
-    toast(`${plural(n, 'card')} now counted as printed copies in this deck.`);
-  },
   'copy-text': () => copyText(),
 
   'refresh-db': async () => {
@@ -2305,7 +2477,8 @@ async function restoreFile(file) {
     // From here on only the checked copy is used.
     const c = migrate(raw);
     const changed = S.meta.changed;
-    const newer = changed && date && changed > date;
+    // Compared as times, not text: a file from the earlier version may give its date with a UTC offset.
+    const newer = changed && date && Date.parse(changed) > Date.parse(date);
     const msg = [`Restore ${file.name}?`,
       `Backup from ${date ? niceDate(date) : 'an unknown date'}: ${plural(cardCount(c), 'card')}, ${plural(c.decks.length, 'deck')}.`];
     if (newer) msg.push(`This backup is from ${niceDate(date)}. This device has newer changes (last one ${niceDate(changed)}` +
@@ -2336,16 +2509,70 @@ function newDeck(name, cards, source = '') {
   return deck;
 }
 
-// Counts the cards the deck is short of as printed copies (those `only` accepts). Returns how many.
-function markPrinted(deck, only = () => true) {
-  deck.proxies = deck.proxies || {};
-  let n = 0;
-  for (const r of planDeck(deck).rows) {
-    if (!r.print || !only(r.t)) continue;
-    deck.proxies[r.key] = (deck.proxies[r.key] || 0) + r.print;
-    n += r.print;
+/* ---------- print queue ---------- */
+
+// Each PDF made goes into the print queue. Done adds its cards to the collection, as copies of the printing whose image
+// the PDF used: printed cards are cards you own like any other. Cancel drops it. (Decks saved by earlier versions may
+// still hold printed copies of their own, in deck.proxies.)
+const printQueue = () => S.printQueue || [];
+const jobSize = j => Object.values(j.cards).reduce((a, n) => a + n, 0);
+
+// Copies in the print queue, per title.
+function queuedByTitle() {
+  const m = new Map();
+  for (const j of printQueue()) for (const [code, n] of Object.entries(j.cards)) {
+    const key = DB.byCode.get(code)?.key;
+    if (key) m.set(key, (m.get(key) || 0) + n);
   }
-  return n;
+  return m;
+}
+
+// A job for the cards that went into a PDF (one per copy; other faces and Méliès U's extra fronts don't add a card).
+// The same cards for the same decks again (the PDF made twice) don't make a second job. Returns whether it was added.
+function queueJob(job) {
+  const cards = {};
+  for (const x of job.items) if (x.main && job.placed.has(x.id)) cards[x.codes[0]] = (cards[x.codes[0]] || 0) + 1;
+  if (!Object.keys(cards).length) return false;
+  const same = j => JSON.stringify(j.cards) === JSON.stringify(cards) && j.decks.join() === job.decks.join();
+  if (printQueue().some(same)) return false;
+  (S.printQueue ||= []).push({ id: uid(), created: new Date().toISOString(), title: job.name || 'Deck', cards, decks: job.decks });
+  save();
+  return true;
+}
+
+function finishJob(id, done) {
+  const j = printQueue().find(x => x.id === id);
+  if (!j) return;
+  S.printQueue = printQueue().filter(x => x !== j);
+  if (!S.printQueue.length) delete S.printQueue;
+  if (done) for (const [code, n] of Object.entries(j.cards)) if (DB.byCode.has(code)) setOwn(code, own(code).n + n);
+  save();
+  render();
+  toast(done ? `${plural(jobSize(j), 'printed card')} added to your collection.` : `Print job for ${j.title} cancelled.`);
+}
+
+const PRINTER_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 9V3h10v6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="9" width="18" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="7" y="14" width="10" height="7" fill="var(--panel)" stroke="currentColor" stroke-width="2"/></svg>';
+
+// The printer button at the top: a dot while jobs wait; its drop-down lists them.
+function renderPrintMenu() {
+  const jobs = printQueue(), n = jobs.reduce((a, j) => a + jobSize(j), 0);
+  const sum = $('#pq summary');
+  if (!sum) return; // a page from before the print queue (say still in the browser's cache)
+  sum.innerHTML = PRINTER_SVG + (jobs.length ? '<span class="pq-dot"></span>' : '');
+  sum.title = jobs.length ? `Print queue: ${plural(n, 'card')} waiting to be printed` : 'Print queue: nothing waiting';
+  sum.setAttribute('aria-label', sum.title);
+  const cardList = j => Object.entries(j.cards).map(([code, k]) => [DB.byCode.get(code), k]).filter(([c]) => c)
+    .sort((a, b) => a[0].title.localeCompare(b[0].title)).map(([c, k]) => `${k}× ${esc(c.title)}`).join('<br>');
+  $('#pq-body').innerHTML = `
+    <div class="menu-label">Print queue</div>
+    ${jobs.length ? jobs.map(j => `<div class="pq-job">
+        <details><summary><b>${esc(j.title)}</b> <span class="muted">${plural(jobSize(j), 'card')} · ${niceDate(j.created)}</span></summary>
+          <div class="pq-cards">${cardList(j)}</div></details>
+        <div class="pq-acts"><button class="primary" data-act="pq-done" data-id="${j.id}">Printed: add to collection</button>
+          <button data-act="pq-cancel" data-id="${j.id}">Cancel</button></div>
+      </div>`).join('')
+      : '<div class="menu-note">Nothing waiting. Each PDF you make from Print cards waits here until you mark it printed.</div>'}
+    <button data-act="print-open">Print cards for several decks…</button>`;
 }
 
 // Shows text in a sheet with a copy button. Works over plain http on a phone, where the clipboard API is blocked.
@@ -2393,7 +2620,7 @@ document.addEventListener('click', e => {
   // A click in a Collection row picks it for typing counts.
   const row = e.target.closest('#items tr');
   if (row) focusRow(row, false);
-  for (const d of $$('details.menu[open], details.dd[open]')) if (!d.contains(e.target) || el?.dataset.act === 'f-set') d.open = false;
+  for (const d of $$('details.menu[open], details.dd[open], details.pq[open]')) if (!d.contains(e.target) || el?.dataset.act === 'f-set') d.open = false;
   if (el && act[el.dataset.act] && el.type !== 'checkbox') {
     if (el.tagName === 'A' && el.getAttribute('href') === 'javascript:') e.preventDefault();
     if (S.locked && LOCKED_ACTS.has(el.dataset.act)) {
@@ -2429,10 +2656,7 @@ document.addEventListener('change', e => {
     store.set('stats', UI.stats);
     render();
   }
-  if (el.dataset.deckField) {
-    currentDeck()[el.dataset.deckField] = el.value;
-    save();
-  }
+  if (el.dataset.deckField) delete el.dataset.editing; // the edit is done; the next one counts again
   if (el.id === 'restore-file' && el.files[0]) restoreFile(el.files[0]);
 });
 
@@ -2448,6 +2672,14 @@ document.addEventListener('input', e => {
   if (el.id === 'find-q') {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => { UI.find.q = el.value; store.set('findFilters', UI.find); renderFindResults(); }, 150);
+  }
+  // Saved as you type, not on change: that fires only when the field loses focus, and a phone can close the app
+  // before it does (the save when the page is hidden only covers changes it knows about).
+  // One edit of a field counts once towards "changes since backup", not once per pause in typing.
+  if (el.dataset.deckField) {
+    currentDeck()[el.dataset.deckField] = el.value;
+    save(!el.dataset.editing);
+    el.dataset.editing = '1';
   }
   if (el.id === 'w-decks') { UI.welcome.decks = el.value; $('#w-summary').textContent = welcomeSummary(); }
 });
@@ -2518,9 +2750,11 @@ window.addEventListener('appinstalled', () => checkStorage());
   try {
     // Card data comes from the cache when there is one; only the very first start waits for NetrunnerDB.
     let raw = await idb.get('nrdb', 'data');
-    const cached = !!raw;
-    if (!raw) raw = await fetchNrdb();
-    loadDB(raw);
+    let cached = !!raw;
+    // A cached copy that can't be read (damaged, or from an incompatible version) is fetched again, instead of
+    // failing every start: Try again would only reload the same copy.
+    if (raw) try { loadDB(raw); } catch (e) { console.warn('Cached card data unreadable, fetching it again:', e); raw = null; cached = false; }
+    if (!raw) loadDB(raw = await fetchNrdb());
     // The product filter became a set filter; keep the set of a product picked before.
     if (UI.filters.pack) { UI.filters.set = DB.packByCode.get(UI.filters.pack)?.cycle_code || ''; delete UI.filters.pack; saveFilters(); }
     // "Missing from a complete set" was removed (Add by set's "N missing" does it); it falls back to all cards.

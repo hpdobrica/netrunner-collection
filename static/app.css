@@ -68,6 +68,27 @@ label.check { display: inline-flex; align-items: center; gap: 6px; min-height: v
 .save-status.error { color: var(--bad); }
 .lock-btn { display: inline-flex; align-items: center; justify-content: center; width: var(--tap); padding: 0; color: var(--muted); }
 body.locked .lock-btn { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+/* print queue: the printer button, a dot while jobs wait, and its drop-down */
+.pq { position: relative; }
+.pq summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; position: relative;
+  width: var(--tap); height: var(--tap); border-radius: 6px; color: var(--muted); }
+.pq summary::-webkit-details-marker { display: none; }
+.pq[open] summary, .pq summary:hover { color: var(--text); background: var(--panel2); }
+.pq-dot { position: absolute; top: 8px; right: 8px; width: 9px; height: 9px; border-radius: 50%; background: var(--bad);
+  box-shadow: 0 0 0 2px var(--panel); }
+.pq .pq-body { width: 320px; max-height: 70vh; overflow-y: auto; }
+.pq-job { padding: 8px 10px; border-top: 1px solid var(--line); }
+.pq-job summary { display: block; width: auto; height: auto; color: var(--text); cursor: pointer; overflow-wrap: anywhere; }
+.pq-job summary:hover { background: none; }
+.pq-job summary .muted { font-size: 12px; }
+.pq-cards { font-size: 13px; color: var(--muted); padding: 6px 0 0 12px; max-height: 200px; overflow-y: auto; }
+.pq-acts { display: flex; gap: 6px; margin-top: 6px; }
+.pq-acts button { min-height: 32px; font-size: 13px; padding: 0 10px; border: 1px solid var(--line); }
+.pq-acts button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+@media (max-width: 640px) {
+  .pq .pq-body { position: fixed; left: 8px; right: 8px; top: 52px; width: auto; }
+}
+.pq-body > button { border-top: 1px solid var(--line); border-radius: 0; }
 .menu { position: relative; }
 .menu summary { list-style: none; cursor: pointer; font-size: 20px; padding: 4px 10px; border-radius: 6px; }
 .menu summary::-webkit-details-marker { display: none; }
@@ -157,6 +178,7 @@ table.list { width: 100%; border-collapse: collapse; }
 .pill.partial, .pill.borrow { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
 .pill.print { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); }
 .pill.built { background: color-mix(in srgb, var(--built) 22%, transparent); color: var(--built); }
+.pill.printing { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .tag { font-size: 11px; color: var(--muted); font-weight: 400; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 
 /* welcome */
@@ -184,6 +206,8 @@ table.list { width: 100%; border-collapse: collapse; }
 .banner.borrow { border-color: var(--warn); }
 .banner.print { border-color: var(--bad); }
 .banner.built { border-color: var(--built); }
+.banner.printing { border-color: var(--accent); }
+.st.printing { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .st { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; font-weight: 600; padding: 1px 6px; border-radius: 10px; margin: 1px 0; }
 .st.ok { color: var(--ok); }
 .st.print { color: var(--bad); background: color-mix(in srgb, var(--bad) 15%, transparent); }
@@ -374,6 +398,20 @@ ul.plain { padding-left: 18px; margin: 0; }
 .ffg-tag { position: absolute; left: 0; right: 0; bottom: 8px; z-index: 2; text-align: center; font-size: 12px; font-weight: 600;
   background: rgba(0, 0, 0, .75); color: #fff; padding: 3px 0; }
 .proxy-break { grid-column: 1 / -1; font-size: 12px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 4px; }
+.proxy-deck { grid-column: 1 / -1; font-weight: 600; margin-top: 6px; }
+/* proxy sheet for several decks: the decks to print */
+.decks-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.decks-head h2 { margin: 0; }
+.print-picker { margin-top: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); max-width: 720px; }
+.pp-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.pp-head > .muted { flex: 1; font-size: 13px; }
+.pp-head button { min-height: 30px; font-size: 12px; padding: 0 10px; }
+.print-pick { display: flex; align-items: center; gap: 4px; padding: 0 10px; min-height: var(--tap); cursor: pointer; border-top: 1px solid var(--line); }
+.pp-head + .print-pick { border-top: 0; }
+.print-pick input { margin: 0 8px 0 0; }
+.print-pick.on { background: var(--panel2); }
+.pp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-n { font-size: 13px; white-space: nowrap; }
 @media (max-width: 640px) {
   /* Two steppers per row: smaller buttons, and In decks goes (Free still shows what's left). */
   #results .list .stepper button { width: 32px; min-height: 32px; }
