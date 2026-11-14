@@ -27,6 +27,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          fetch-depth: 0 # the changelog check reads every commit in the push
+      # Refuses the deploy if a commit bumped VERSION without a changelog line or "Changelog: none (reason)".
+      # Go comes with the runner image. BEFORE is all zeros for a new branch and empty for a manual run: then only
+      # the files as they are now are checked.
+      - name: Check the changelog
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            go run ./tools/changelog -range "$BEFORE..$AFTER"
+          else
+            go run ./tools/changelog
+          fi
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:

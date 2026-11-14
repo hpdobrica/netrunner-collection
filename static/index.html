@@ -32,16 +32,18 @@
   </details>
   <button id="lock-btn" class="lock-btn" data-act="lock"></button>
   <details class="menu">
-    <summary title="More">⋯</summary>
+    <summary title="More">⋯<span class="news-dot" hidden></span></summary>
     <div class="menu-body">
       <div class="menu-label">Products shown</div>
       <div id="menu-publisher" class="menu-pub"></div>
       <button data-act="refresh-db">Refresh card data from NetrunnerDB</button>
       <button data-act="backup">Download backup</button>
       <button data-act="restore">Restore from backup…</button>
+      <button data-act="news">What's new<span class="news-dot" hidden></span></button>
       <div class="menu-note" id="backup-note"></div>
       <div class="menu-note" id="storage-note"></div>
       <div class="menu-note" id="db-note"></div>
+      <div class="menu-note" id="build-note"></div>
       <div class="menu-note about">About: an unofficial fan tool, not affiliated with or endorsed by Fantasy Flight Games,
         Wizards of the Coast, Null Signal Games or NetrunnerDB. Netrunner and Android are trademarks of Fantasy Flight
         Publishing, Inc. and/or Wizards of the Coast LLC. Card images, text and set symbols belong to their respective owners.
@@ -55,6 +57,7 @@
 <div id="modal" class="modal" hidden></div>
 <div id="toast" class="toast" hidden></div>
 <div id="update" class="toast update" hidden>New version available <button class="primary" data-act="update-reload">Reload</button></div>
+<div id="news" class="toast update news" hidden><span id="news-text"></span><button class="primary" data-act="news">See what's new</button><button class="news-x" data-act="news-dismiss" aria-label="Dismiss">✕</button></div>
 <input type="file" id="restore-file" accept=".json,application/json" hidden>
 <script src="app.js"></script>
 </body>

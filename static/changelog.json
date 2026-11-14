@@ -1,0 +1,54 @@
+{
+  "checked": "2026-11-14.3",
+  "entries": [
+    {
+      "date": "2026-11-14",
+      "new": [
+        { "v": "2026-11-14.3", "text": "**What's new.** The menu lists recent changes, and after an update the app tells you what's new." },
+        { "v": "2026-11-14.2", "text": "**Sets on deck pages.** Each card shows the set symbol and number of the printings you own, so you know which binder to pull it from." },
+        { "v": "2026-11-14.2", "text": "**Group a deck by set.** Switch a deck between By type and By set to gather its cards product by product. The app remembers your choice on this device." }
+      ],
+      "improved": [
+        { "v": "2026-11-14.2", "text": "**Locked collection covers decks.** While the collection is locked, a saved deck's cards can't be changed. You can still save new decks, and build, deconstruct, rename and print decks." }
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-11-13",
+      "new": [
+        { "v": "2026-11-13.7", "text": "**Print queue.** Each proxy PDF you make waits in Print cards until you mark it printed, which adds the cards to your collection. Queued cards aren't asked for again." },
+        { "v": "2026-11-13.7", "text": "**Several decks in one PDF.** Print cards for more than one deck at once, optionally starting each deck on a new page." }
+      ],
+      "improved": [
+        { "v": "2026-11-13.7", "text": "**Card names match more spellings.** Names with ™, ʼ, curly quotes or ₂ match when typed plainly." },
+        { "v": "2026-11-13.7", "text": "**Pasting deck lists.** Titles starting with a number (\"15 Minutes\") and counts after the card name now work. Several lists pasted together are split into separate decks." },
+        { "v": "2026-11-13.7", "text": "**Hide rotated** also hides rotated sets from the set picker." },
+        { "v": "2026-11-13.7", "text": "**Locked collection in the print queue.** The \"add to collection\" button says \"Locked: unlock at the top\"." }
+      ],
+      "fixed": [
+        { "v": "2026-11-13.7", "text": "Decks without a name show as \"Untitled deck\" everywhere." },
+        { "v": "2026-11-13.7", "text": "Stats works when you have decks but no cards yet." },
+        { "v": "2026-11-13.7", "text": "Deck names and notes are saved as you type." },
+        { "v": "2026-11-13.7", "text": "When a card is left out of a several-deck PDF, the next deck still starts on a new page." }
+      ]
+    },
+    {
+      "date": "2026-11-12",
+      "new": [
+        { "v": "2026-11-12.26", "text": "**Stats.** Set completion, free cards against cards in decks, breakdowns by faction and type, and a shopping list." },
+        { "v": "2026-11-12.26", "text": "**Find decks on NetrunnerDB.** The Decks page lists published decks ranked by how few cards you'd be missing. Filter by side, faction, Standard or Startup." },
+        { "v": "2026-11-12.26", "text": "**Proxy PDF.** Download a print-ready PDF of the cards a deck is short, laid out like NetrunnerDB's print-and-play sheets, with paper, cut mark and bleed options." },
+        { "v": "2026-11-12.26", "text": "**Browse cards with arrow keys.** In card details, ← and → (or the ‹ › buttons) step through the cards of the page you opened it from." }
+      ],
+      "improved": [
+        { "v": "2026-11-12.26", "text": "**One row per printing** in the Collection list, with its set symbol and number. Click a column heading to sort by it." },
+        { "v": "2026-11-12.26", "text": "**Add by set works in whole boxes.** Use +/- to add or remove whole boxes of a product. Change single cards in the Collection list." },
+        { "v": "2026-11-12.26", "text": "**Stats: Short for saved decks** opens a list of missing cards you can copy." }
+      ],
+      "fixed": [
+        { "v": "2026-11-12.26", "text": "Deck lists exported from NetrunnerDB no longer report their summary lines as unrecognised cards." },
+        { "v": "2026-11-12.26", "text": "Adding a deck list no longer adds it twice on a second tap." }
+      ]
+    }
+  ]
+}

@@ -324,6 +324,18 @@ ul.plain { padding-left: 18px; margin: 0; }
 .toast[hidden] { display: none; }
 /* Stays until used, above the ordinary toast. */
 .toast.update:not([hidden]) { display: flex; align-items: center; gap: 12px; white-space: nowrap; bottom: calc(76px + env(safe-area-inset-bottom)); padding: 6px 6px 6px 16px; }
+/* What's new: the headline may be long, so it wraps; the buttons don't. */
+.toast.news:not([hidden]) { white-space: normal; width: max-content; gap: 8px; }
+.toast.news button { white-space: nowrap; }
+.news-x { border: 0; background: none; color: inherit; padding: 4px 8px; }
+.news-dot { display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.menu summary .news-dot { position: relative; top: -8px; margin-left: 0; }
+.news-dot[hidden] { display: none; }
+.news-list h3 { margin: 18px 0 4px; }
+.news-list h4 { margin: 8px 0 2px; color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.news-list ul { margin: 0; padding-left: 18px; }
+.news-list li { margin: 3px 0; }
+.news-list li.unseen::marker { color: var(--accent); content: '● '; }
 .storage-ok { color: var(--ok); }
 .install-hint { color: var(--muted); border-left: 3px solid var(--accent); padding-left: 10px; }
 
