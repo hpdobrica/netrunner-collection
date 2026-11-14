@@ -52,6 +52,11 @@ The service worker (`static/sw.js`) serves the app from its cache, so a changed 
 **`VERSION` in `sw.js` changes**. Bump it with every deploy. Open copies then show *New version available*
 with a Reload button; the app never reloads by itself.
 
+Each `VERSION` bump also needs a line in `static/changelog.json`, which the app shows under *What's new* and in a
+toast after an update, or `Changelog: none (reason)` in the commit message. The workflow checks every commit in
+the push with `go run ./tools/changelog` and doesn't deploy if one is missing. How to write the lines:
+`.claude/skills/changelog/SKILL.md`.
+
 While editing with a service worker installed, either bump `VERSION`, or tick *Update on reload* under
 DevTools → Application → Service workers.
 

@@ -2144,6 +2144,7 @@ function renderModal() {
   const el = $('#modal');
   if (UI.modal === ':add-list') return renderAddList(el);
   if (UI.modal === ':text') return renderText(el);
+  if (UI.modal === ':news') return renderNews(el);
   const t = UI.modal && DB.titles.get(UI.modal);
   if (!t) { el.hidden = true; el.innerHTML = ''; return; }
   const shown = DB.byCode.get(UI.modalCode) || mainPrinting(t);
@@ -2477,6 +2478,17 @@ const act = {
     toast('Backup downloaded.');
   },
   'restore': () => { $('.menu').open = false; $('#restore-file').click(); },
+  'news': () => {
+    $('.menu').open = false;
+    $('#news').hidden = true;
+    UI.modal = ':news';
+    renderModal(); // marks what's unseen; from now on it counts as seen
+    const newest = newsItems().reduce((m, x) => cmpVersion(x.v, m) > 0 ? x.v : m, '');
+    if (newest) store.set('newsSeen', newest);
+    NEWS.unseen = new Set();
+    $$('.news-dot').forEach(d => { d.hidden = true; });
+  },
+  'news-dismiss': () => { $('#news').hidden = true; },
   'update-reload': async () => {
     // Save first: the reload must not lose a change still waiting for its debounced save.
     await flush();
@@ -2759,6 +2771,77 @@ window.addEventListener('hashchange', () => { UI.modal = null; route(); });
 /* ---------- offline, installing and updates ---------- */
 
 const PWA = { waiting: null, reloading: false, storage: '' };
+
+/* ---------- what's new ---------- */
+
+// changelog.json lists the changes people can see, each line tagged with the VERSION (sw.js) it shipped in. The
+// service worker precaches it with the rest of the version, so the list always matches the code that's running.
+// The last version seen is kept per device in localStorage, never in the collection: backups stay as they are.
+const NEWS = { checked: '', entries: [], unseen: new Set() };
+const NEWS_GROUPS = [['new', 'New'], ['improved', 'Improved'], ['fixed', 'Fixed']];
+
+// '2026-11-14.10' is newer than '2026-11-14.9': the date compares as text, the number after the dot as a number.
+function cmpVersion(a, b) {
+  const [da, na] = String(a).split('.'), [db, nb] = String(b).split('.');
+  return da < db ? -1 : da > db ? 1 : (Number(na) || 0) - (Number(nb) || 0);
+}
+
+const newsItems = () => NEWS.entries.flatMap(e => NEWS_GROUPS.flatMap(([g]) => e[g]));
+const newsHtml = text => esc(text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+// The bold lead-in, or the start of a line that has none ("Fixed" lines), for the toast.
+function newsLead(text) {
+  const t = (/^\*\*(.+?)\*\*/.exec(text)?.[1] ?? text).replace(/[.:]\s*$/, '');
+  return t.length > 60 ? t.slice(0, 57).trimEnd() + '…' : t;
+}
+
+async function loadNews() {
+  const raw = await (await fetch('changelog.json')).json();
+  const item = x => x && typeof x.v === 'string' && typeof x.text === 'string' ? { v: x.v, text: x.text } : null;
+  NEWS.checked = typeof raw?.checked === 'string' ? raw.checked : '';
+  NEWS.entries = (Array.isArray(raw?.entries) ? raw.entries : []).map(e => ({
+    date: String(e?.date ?? ''),
+    ...Object.fromEntries(NEWS_GROUPS.map(([g]) => [g, (Array.isArray(e?.[g]) ? e[g] : []).map(item).filter(Boolean)])),
+  }));
+  const newest = newsItems().reduce((m, x) => cmpVersion(x.v, m) > 0 ? x.v : m, '');
+  $('#build-note').textContent = NEWS.checked ? `Build ${NEWS.checked}` : '';
+  if (!newest) return;
+  let seen = store.get('newsSeen', null);
+  if (seen == null) {
+    // First start on this device: a new user gets no list of old changes. Someone who used the app before the
+    // list existed hears about what came after the last version they could have had without it.
+    seen = base == null ? newest : '2026-11-14.2';
+    store.set('newsSeen', seen);
+  }
+  const unseen = newsItems().filter(x => cmpVersion(x.v, seen) > 0);
+  NEWS.unseen = new Set(unseen);
+  $$('.news-dot').forEach(d => { d.hidden = !unseen.length; });
+  // The toast shows once per version; the dot stays until the list is opened.
+  if (!unseen.length || store.get('newsToasted', '') === newest || !$('#update').hidden) return;
+  store.set('newsToasted', newest);
+  const head = NEWS_GROUPS.flatMap(([g]) => NEWS.entries.flatMap(e => e[g])).find(x => NEWS.unseen.has(x));
+  $('#news-text').innerHTML = `Updated: <b>${esc(newsLead(head.text))}</b>${unseen.length > 1 ? ` + ${unseen.length - 1} more` : ''}`;
+  $('#news').hidden = false;
+}
+
+function renderNews(el) {
+  const date = d => { const t = new Date(d + 'T00:00:00'); return isNaN(t) ? esc(d) : t.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }); };
+  el.hidden = false;
+  el.innerHTML = `
+  <div class="modal-box narrow" role="dialog" aria-label="What's new">
+    <button class="close" data-act="modal-close" aria-label="Close">×</button>
+    <div class="modal-body news-list">
+      <h2>What's new</h2>
+      ${NEWS.checked ? `<div class="muted">Build ${esc(NEWS.checked)}</div>` : ''}
+      ${NEWS.entries.map(e => `
+        <h3>${date(e.date)}</h3>
+        ${NEWS_GROUPS.filter(([g]) => e[g].length).map(([g, label]) => `
+          <h4>${label}</h4>
+          <ul>${e[g].map(x => `<li${NEWS.unseen.has(x) ? ' class="unseen" title="New since you last looked"' : ''}>${newsHtml(x.text)}</li>`).join('')}</ul>`).join('')}`).join('')
+        || '<p class="muted">Nothing listed yet.</p>'}
+    </div>
+  </div>`;
+}
+
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
@@ -2771,6 +2854,7 @@ async function registerWorker() {
     // Without a controller this is the first install, not an update.
     if (!w || !navigator.serviceWorker.controller) return;
     PWA.waiting = w;
+    $('#news').hidden = true; // the two toasts share a spot; Reload brings this one back with more in it
     $('#update').hidden = false;
   };
   offer(reg.waiting);
@@ -2821,6 +2905,7 @@ window.addEventListener('appinstalled', () => checkStorage());
     route();
     registerWorker().catch(e => console.warn('Service worker not registered:', e));
     checkStorage().catch(() => {});
+    loadNews().catch(e => console.warn('Changelog not loaded:', e));
     if (cached && navigator.onLine !== false && !(Date.now() - Date.parse(raw.fetched) < NRDB_MAX_AGE)) {
       fetchNrdb().then(r => { loadDB(r); render(); toast('Card data updated from NetrunnerDB.'); })
         .catch(e => console.warn('Background card data refresh failed:', e));
