@@ -1,13 +1,15 @@
 {
-  "checked": "2026-11-15.2",
+  "checked": "2026-11-15.3",
   "entries": [
     {
       "date": "2026-11-15",
       "new": [],
       "improved": [
+        { "v": "2026-11-15.3", "text": "**Saving a checked deck.** After Check, a Save button for the deck appears right under the result. Editing the list clears the result until you check again." },
         { "v": "2026-11-15.2", "text": "**Alt art is part of Owned.** Alt art now reads \"1 of 3\": it marks which of your owned copies are alt art, and no longer adds a copy. Add the card under Owned first." }
       ],
       "fixed": [
+        { "v": "2026-11-15.3", "text": "Updates now always bring the new version of the app. The last update could show its What's new while the app itself stayed as it was." },
         { "v": "2026-11-15.1", "text": "Setup opens on your first visit even when you arrive through a link to another page, and stays until you finish or skip it." }
       ]
     },
