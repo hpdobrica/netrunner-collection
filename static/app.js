@@ -529,8 +529,10 @@ function route() {
   try { UI.arg = decodeURIComponent(rest.join('/')); } catch { UI.arg = ''; }
   // Leaving the Collection list drops its "showing only" list and the row picked for typing counts.
   if (UI.view !== 'collection') { UI.only = null; UI.lfocus = null; }
-  // Setup is for the first run only; afterwards products are added on Add by set.
+  // Setup is for the first run only; afterwards products are added on Add by set. Until it is finished or
+  // skipped, every page leads to it, so a first visit through a link to another page still starts there.
   if (UI.view === 'welcome' && S.onboarded) { location.replace('#sets'); return; }
+  if (UI.view !== 'welcome' && !S.onboarded) { location.replace('#welcome'); return; }
   render();
 }
 
@@ -575,6 +577,16 @@ function cardImg(code, title, size) {
 function stepper(act, attrs, n, extra = '') {
   return `<span class="stepper ${extra}"><button data-act="${act}" ${attrs} data-d="-1" aria-label="Fewer">−</button><span class="n">${n}</span><button data-act="${act}" ${attrs} data-d="1" aria-label="More">+</button></span>`;
 }
+
+// Alt art counts which of the owned copies are alt art, so it reads "1 of 3" and can't go above Owned.
+function altStepper(code) {
+  const o = own(code), full = o.custom >= o.n;
+  return `<span class="stepper small alt"><button data-act="alt" data-code="${code}" data-d="-1" aria-label="Fewer alt art">−</button><span class="n">${o.custom}${o.n ? `<small> of ${o.n}</small>` : ''}</span><button data-act="alt" data-code="${code}" data-d="1" aria-label="More alt art" class="${full ? 'full' : ''}" title="${full ? 'All owned copies are alt art. Add a copy under Owned first.' : 'Mark one more owned copy as alt art'}">+</button></span>`;
+}
+
+// What Alt art + says when every owned copy is already alt art.
+const altFull = o => o.n ? `All ${plural(o.n, 'owned copy', 'owned copies')} ${o.n === 1 ? 'is' : 'are'} already alt art. Add the card under Owned first, then mark it as alt art.`
+  : 'Add the card under Owned first. Alt art marks which of your copies are alt art.';
 
 function toast(msg) {
   const el = $('#toast');
@@ -791,7 +803,8 @@ function listHead() {
     const on = f.sort === k || (k === 'name' && groupedSort());
     const aria = on ? ` aria-sort="${f.dir === 'desc' ? 'descending' : 'ascending'}"` : '';
     const arrow = on ? (f.dir === 'desc' ? ' ↓' : ' ↑') : '';
-    const tip = k === 'set' ? 'Sort by set, in card number order' : `Sort by ${l.toLowerCase()}`;
+    const tip = k === 'set' ? 'Sort by set, in card number order'
+      : k === 'alt' ? 'How many of the owned copies are alt art. Sort by alt art' : `Sort by ${l.toLowerCase()}`;
     return `<th${aria}><button class="th-sort ${on ? 'on' : ''}" data-act="sort" data-v="${k}" title="${tip}">${l}${arrow}</button></th>`;
   }).join('')}</tr></thead>`;
 }
@@ -845,7 +858,7 @@ function viewCollection(app) {
       <button data-act="sets-open" title="Add or remove whole boxes of a product">By set</button>
       <button data-act="add-list-open" title="Paste a list or NetrunnerDB deck links">From a list</button></span></div>
   ${UI.only?.codes || f.set ? `<p class="hint">Click a row, then type: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>0</kbd>–<kbd>9</kbd> count ·
-    <kbd>+</kbd>/<kbd>−</kbd> adjust · <kbd>A</kbd>/<kbd>Shift+A</kbd> alt art</p>` : ''}
+    <kbd>+</kbd>/<kbd>−</kbd> adjust · <kbd>A</kbd>/<kbd>Shift+A</kbd> mark more / fewer copies as alt art</p>` : ''}
   <div id="results"></div>`;
   renderResults();
 }
@@ -905,7 +918,7 @@ function printingRow(t, p, locks, span) {
     <td class="card"><span class="dot" style="--fc:${fcolor(t.faction)}"></span><a href="javascript:" data-act="card" data-key="${esc(t.key)}" data-code="${p.code}">${esc(t.title)}</a><span class="psub"><span class="setno-sm">${setIcon(p.pack.cycle_code)}${p.position}</span>${count}</span></td>
     <td>${TYPE_NAMES[t.type] || t.type}</td><td>${fname(t.faction)}</td>
     <td>${stepper('print-n', `data-code="${p.code}"`, o.n)}</td>
-    <td>${stepper('alt', `data-code="${p.code}"`, o.custom, 'small')}</td>${totals}
+    <td>${altStepper(p.code)}</td>${totals}
   </tr>`;
 }
 
@@ -977,7 +990,7 @@ function collectionCards(label, codes) {
   collectionFrom({ hideRotated: false }, { label, codes: new Set(codes), sort: 'set' });
 }
 
-// Typing counts in the Collection list: click a row, then ↑/↓ move, 0–9 set the count, +/− adjust, A / Shift+A alt art.
+// Typing counts in the Collection list: click a row, then ↑/↓ move, 0–9 set the count, +/− adjust, A / Shift+A mark more / fewer copies as alt art.
 function focusRow(tr, scroll = true) {
   for (const x of $$('#items tr.focus')) x.classList.remove('focus');
   UI.lfocus = tr?.dataset.code || null;
@@ -1003,7 +1016,7 @@ function onListKey(e) {
   if (/^[0-9]$/.test(k)) setOwn(code, +k);
   else if (k === '+' || k === '=') setOwn(code, o.n + 1);
   else if (k === '-' || k === '_') setOwn(code, o.n - 1);
-  else if (k === 'a') setOwn(code, Math.max(o.n, o.custom + 1), o.custom + 1);
+  else if (k === 'a') { if (o.custom >= o.n) return toast(altFull(o)); setOwn(code, o.n, o.custom + 1); }
   else setOwn(code, o.n, o.custom - 1);
   refresh(DB.byCode.get(code).key);
 }
@@ -2171,13 +2184,13 @@ function renderModal() {
       <div class="muted">${fname(t.faction)} · ${TYPE_NAMES[t.type] || t.type}${c.keywords ? ': ' + esc(c.keywords) : ''}${c.faction_cost ? ' · influence ' + c.faction_cost : ''}</div>
       <p class="text">${cardText(c.text)}</p>
       <h3>Your copies</h3>
-      <table class="list compact"><thead><tr><th>Printing</th><th>Owned</th><th>Alt art</th></tr></thead><tbody>
+      <table class="list compact"><thead><tr><th>Printing</th><th>Owned</th><th title="How many of the owned copies are alt art">Of these, alt art</th></tr></thead><tbody>
       ${t.printings.filter(p => pubOk(p.pack) || own(p.code).n || p === shown).map(p => {
         const o = own(p.code);
         return `<tr class="${p === shown ? 'cur' : ''}">
           <td>${setIcon(p.pack.cycle_code)}<a href="javascript:" data-act="modal-show" data-code="${p.code}">${esc(p.pack.name)}</a> <span class="muted">#${p.position} · ${PUBLISHERS[p.pack.publisher]}</span></td>
           <td>${stepper('print-n', `data-code="${p.code}"`, o.n)}</td>
-          <td>${stepper('alt', `data-code="${p.code}"`, o.custom, 'small')}</td></tr>`;
+          <td>${altStepper(p.code)}</td></tr>`;
       }).join('')}
       </tbody></table>
       <h3>In decks</h3>
@@ -2263,8 +2276,9 @@ const act = {
   'print-n': el => { const c = el.dataset.code; setOwn(c, own(c).n + +el.dataset.d); refresh(DB.byCode.get(c).key); },
   'alt': el => {
     const c = el.dataset.code, o = own(c), d = +el.dataset.d;
-    // Adding alt art to a card you don't have yet means you have that copy.
-    setOwn(c, Math.max(o.n, o.custom + d), o.custom + d);
+    // Alt art is part of Owned, never extra: it only marks copies you already have.
+    if (d > 0 && o.custom >= o.n) return toast(altFull(o));
+    setOwn(c, o.n, o.custom + d);
     refresh(DB.byCode.get(c).key);
   },
 
