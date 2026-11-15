@@ -207,6 +207,8 @@ table.list { width: 100%; border-collapse: collapse; }
 
 /* decks */
 .decks { display: grid; gap: 24px; }
+/* Save under the check result: the step after Check */
+.check-save { margin: 0 0 8px; }
 .check-panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
 .banner { margin: 12px 0 8px; padding: 10px 12px; border-radius: 6px; border-left: 4px solid var(--muted); background: var(--panel2); }
 .banner.ok { border-color: var(--ok); }

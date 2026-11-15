@@ -1061,11 +1061,7 @@ function viewDecks(app) {
       <h2>Can I build this?</h2>
       <p class="muted">Paste a deck list (plain text from NetrunnerDB, Jinteki.net, …) or a NetrunnerDB deck link.</p>
       <textarea id="check-in" rows="6" placeholder="https://netrunnerdb.com/en/decklist/…&#10;or&#10;Zahya Sadeghi: Versatile Smuggler&#10;3x Sure Gamble&#10;…">${esc(C.text)}</textarea>
-      <div class="row">
-        <button class="primary" data-act="check">Check</button>
-        <button data-act="check-save" ${C.result ? '' : 'disabled'}>Save as deck</button>
-        <button data-act="deck-new">New empty deck</button>
-      </div>
+      <div class="row" id="check-row">${checkButtons(C)}</div>
       <div id="check-out">${C.error ? `<p class="error">${esc(C.error)}</p>` : C.result ? checkResult(C.result, locks) : ''}</div>
     </section>
     <section>
@@ -1079,11 +1075,16 @@ function viewDecks(app) {
   </div>`;
 }
 
+// Check is the step to take until a list is checked; then saving it is, from the button under the result.
+const checkButtons = C => `<button class="${C.result ? '' : 'primary'}" data-act="check">Check</button>
+  <button data-act="deck-new">New empty deck</button>`;
+
 function checkResult(deck, locks) {
   const { rows, sum } = planDeck(deck, locks);
   const problems = rows.filter(r => r.print || r.printing || r.borrowN);
   return `
     <div class="banner ${sum.status}">${esc(deck.name || 'Deck')}: ${plural(sum.size, 'card')} · ${statusText(sum, false)}</div>
+    <div class="row check-save"><button class="primary" data-act="check-save">Save “${esc(deck.name || 'Deck')}” to my decks</button></div>
     ${problems.length ? `<table class="list compact"><tbody>${problems.map(r => planRow(r, null)).join('')}</tbody></table>` : ''}
     ${deck.unknown?.length ? `<details class="unknown"><summary>${plural(deck.unknown.length, 'line')} not recognised</summary><pre>${esc(deck.unknown.join('\n'))}</pre></details>` : ''}`;
 }
@@ -2379,13 +2380,15 @@ const act = {
 
   'check': async () => {
     const C = UI.check;
-    C.text = $('#check-in').value;
+    const text = C.text = $('#check-in').value;
     C.error = ''; C.result = null;
     try {
-      const d = await parseDeckInput(C.text);
+      const d = await parseDeckInput(text);
+      // Edited while a deck link was loading: this result is for a list that isn't in the box any more.
+      if (UI.check.text !== text) return;
       if (!Object.keys(d.cards).length) throw new Error('No cards recognised in that list.');
       C.result = { id: 'check', name: d.name || 'Checked deck', cards: d.cards, proxies: {}, unknown: d.unknown, source: d.source || '' };
-    } catch (e) { C.error = e.message; }
+    } catch (e) { if (UI.check.text !== text) return; C.error = e.message; }
     render();
   },
   'check-save': () => {
@@ -2750,7 +2753,16 @@ document.addEventListener('input', e => {
     searchTimer = setTimeout(() => { UI.filters.q = el.value; saveFilters(); renderResults(); }, 150);
   }
   if (el.id === 'deck-add') $('#deck-add-results').innerHTML = addCardResults(el.value, currentDeck());
-  if (el.id === 'check-in') UI.check.text = el.value;
+  if (el.id === 'check-in') {
+    const C = UI.check;
+    C.text = el.value;
+    // A result is for the list as it was checked: once the list changes, Check is the next step again.
+    if (C.result || C.error) {
+      C.result = null; C.error = '';
+      $('#check-row').innerHTML = checkButtons(C);
+      $('#check-out').innerHTML = '';
+    }
+  }
   if (el.id === 'find-q') {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => { UI.find.q = el.value; store.set('findFilters', UI.find); renderFindResults(); }, 150);

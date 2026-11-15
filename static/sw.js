@@ -4,7 +4,7 @@
 
 // Change VERSION with every deploy. The new worker then caches the new files and waits; the app shows
 // "New version available" and switches only when the user taps Reload.
-const VERSION = '2026-11-15.2';
+const VERSION = '2026-11-15.3';
 const SHELL = 'shell-' + VERSION;
 const IMAGES = 'images';
 const MAX_IMAGES = 600; // about 50 MB; the oldest are removed first
@@ -18,8 +18,10 @@ self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const cache = await caches.open(SHELL);
     await Promise.all(FILES.map(async f => {
-      // cache: 'reload' skips the HTTP cache, so a new version never precaches old files.
-      const res = await fetch(new Request(f, { cache: 'reload' }));
+      // cache: 'reload' skips the browser's HTTP cache, and the ?v= skips caches in front of the site (Cloudflare
+      // kept serving the old app.js for hours after a deploy), so a new version never precaches old files.
+      // It is stored under the plain name, which is what the app asks for.
+      const res = await fetch(new Request(`${f}${f.includes('?') ? '&' : '?'}v=${VERSION}`, { cache: 'reload' }));
       if (!res.ok) throw new Error(`${f}: HTTP ${res.status}`);
       // A redirected response can't answer a page load, so keep a plain copy (some servers redirect, e.g. to add a /).
       await cache.put(f, res.redirected ? new Response(await res.blob(), { headers: res.headers }) : res);
