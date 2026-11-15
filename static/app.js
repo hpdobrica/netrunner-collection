@@ -519,6 +519,7 @@ const UI = {
   // Print cards for several decks: the decks picked (none at first, this visit only), which cards, and whether
   // each deck starts a new page (both remembered).
   print: Object.assign({ ids: new Set(), mode: 'missing', split: false }, store.get('printDecks', {}), { ids: new Set() }),
+  deckEdit: null, // the deck whose cards are being edited (Edit cards on its page)
   deckGroup: store.get('deckGroup', 'type') === 'set' ? 'set' : 'type', // a deck's cards by type or by set (remembered)
 };
 
@@ -529,6 +530,8 @@ function route() {
   try { UI.arg = decodeURIComponent(rest.join('/')); } catch { UI.arg = ''; }
   // Leaving the Collection list drops its "showing only" list and the row picked for typing counts.
   if (UI.view !== 'collection') { UI.only = null; UI.lfocus = null; }
+  // Editing a deck's cards ends when you leave its page.
+  if (UI.view !== 'deck' || UI.arg !== UI.deckEdit) UI.deckEdit = null;
   // Setup is for the first run only; afterwards products are added on Add by set. Until it is finished or
   // skipped, every page leads to it, so a first visit through a link to another page still starts there.
   if (UI.view === 'welcome' && S.onboarded) { location.replace('#sets'); return; }
@@ -578,10 +581,11 @@ function stepper(act, attrs, n, extra = '') {
   return `<span class="stepper ${extra}"><button data-act="${act}" ${attrs} data-d="-1" aria-label="Fewer">−</button><span class="n">${n}</span><button data-act="${act}" ${attrs} data-d="1" aria-label="More">+</button></span>`;
 }
 
-// Alt art counts which of the owned copies are alt art, so it reads "1 of 3" and can't go above Owned.
+// Alt art counts which of the owned copies are alt art, so it reads "1/3" and can't go above Owned.
+// Same size as the Owned stepper; − is off at 0, + stays tappable when full to say why it can't go up.
 function altStepper(code) {
   const o = own(code), full = o.custom >= o.n;
-  return `<span class="stepper small alt"><button data-act="alt" data-code="${code}" data-d="-1" aria-label="Fewer alt art">−</button><span class="n">${o.custom}${o.n ? `<small> of ${o.n}</small>` : ''}</span><button data-act="alt" data-code="${code}" data-d="1" aria-label="More alt art" class="${full ? 'full' : ''}" title="${full ? 'All owned copies are alt art. Add a copy under Owned first.' : 'Mark one more owned copy as alt art'}">+</button></span>`;
+  return `<span class="stepper alt"><button data-act="alt" data-code="${code}" data-d="-1" aria-label="Fewer alt art" ${o.custom ? '' : 'disabled'}>−</button><span class="n">${o.custom}${o.n ? `<small>/${o.n}</small>` : ''}</span><button data-act="alt" data-code="${code}" data-d="1" aria-label="More alt art" class="${full ? 'full' : ''}" title="${full ? 'All owned copies are alt art. Add a copy under Owned first.' : 'Mark one more owned copy as alt art'}">+</button></span>`;
 }
 
 // What Alt art + says when every owned copy is already alt art.
@@ -1120,7 +1124,7 @@ function setCell(r) {
 function planRow(r, deck) {
   const t = r.t;
   const status = [];
-  const edit = deck && !S.locked;
+  const edit = deck && deckEditing(deck);
   if (r.print) status.push(`<span class="st print">print ${r.print}</span>`);
   if (r.printing) status.push(`<span class="st printing">${r.printing} printing</span>`);
   for (const b of r.borrow) status.push(`<span class="st borrow">take ${b.n} of the ${b.has} in <a href="#deck/${b.deck.id}">${esc(deckName(b.deck))}</a></span>`);
@@ -1133,6 +1137,24 @@ function planRow(r, deck) {
     <td class="muted">owned ${r.owned}</td>
     <td>${status.join(' ')}</td>
   </tr>`;
+}
+
+// A deck's cards change only after Edit cards (and never while the collection is locked), so a stray tap on a
+// deck page can't change it. Changes are saved as they're made, like everything else; the same button, now
+// Stop editing, just ends it (as do leaving the page and locking the collection).
+const deckEditing = deck => !S.locked && UI.deckEdit === deck.id;
+
+function deckTools(deck) {
+  if (S.locked) return `<p class="lock-note">Collection is locked, so this deck's cards can't be changed. Use the lock at the top to unlock it.</p>`;
+  const on = deckEditing(deck);
+  return `<div class="deck-editing">
+      <button class="${on ? 'primary' : ''}" data-act="deck-edit" aria-pressed="${on}">${on ? 'Stop editing' : 'Edit cards'}</button>
+      ${on ? `<div class="add-card">
+        <input id="deck-add" placeholder="Add a card by name…" autocomplete="off">
+        <div id="deck-add-results" class="ac"></div>
+      </div>
+      <span class="muted">Changes are saved as you go.</span>` : ''}
+    </div>`;
 }
 
 function viewDeck(app) {
@@ -1166,11 +1188,7 @@ function viewDeck(app) {
       </div>
     </div>
     <div class="deck-tools">
-      ${S.locked ? '<p class="lock-note">Collection is locked, so this deck\'s cards can\'t be changed. Use the lock at the top to unlock it.</p>'
-        : `<div class="add-card">
-        <input id="deck-add" placeholder="Add a card by name…" autocomplete="off">
-        <div id="deck-add-results" class="ac"></div>
-      </div>`}
+      ${deckTools(deck)}
       <span class="seg small" title="By set: in binder order, to gather the cards">${[['type', 'By type'], ['set', 'By set']]
         .map(([v, l]) => `<button class="${UI.deckGroup === v ? 'on' : ''}" data-act="deck-group" data-v="${v}">${l}</button>`).join('')}</span>
     </div>
@@ -2303,6 +2321,8 @@ const act = {
   },
   'lock': () => {
     S.locked = !S.locked;
+    // Locking ends editing a deck's cards; unlocking doesn't start it again.
+    if (S.locked) UI.deckEdit = null;
     save(false);
     render();
     toast(S.locked ? 'Collection locked. Counts can\'t be changed until you unlock it.' : 'Collection unlocked.');
@@ -2406,7 +2426,10 @@ const act = {
     if (!r) return;
     location.hash = '#deck/' + newDeck(r.d.name, r.cards, `https://netrunnerdb.com/en/decklist/${r.d.id}`).id;
   },
-  'deck-new': () => { location.hash = '#deck/' + newDeck('New deck', {}).id; },
+  // A new empty deck opens ready for cards.
+  'deck-new': () => { const id = newDeck('New deck', {}).id; UI.deckEdit = id; location.hash = '#deck/' + id; },
+  // Edit cards / Stop editing.
+  'deck-edit': () => { UI.deckEdit = UI.deckEdit === UI.arg ? null : UI.arg; render(); $('#deck-add')?.focus(); },
   'deck-build': () => {
     const deck = currentDeck(), { sum } = planDeck(deck);
     // Cards you don't own yet are printed first (Print cards); the button isn't offered then.
