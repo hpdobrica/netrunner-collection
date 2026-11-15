@@ -578,10 +578,11 @@ function stepper(act, attrs, n, extra = '') {
   return `<span class="stepper ${extra}"><button data-act="${act}" ${attrs} data-d="-1" aria-label="Fewer">−</button><span class="n">${n}</span><button data-act="${act}" ${attrs} data-d="1" aria-label="More">+</button></span>`;
 }
 
-// Alt art counts which of the owned copies are alt art, so it reads "1 of 3" and can't go above Owned.
+// Alt art counts which of the owned copies are alt art, so it reads "1/3" and can't go above Owned.
+// Same size as the Owned stepper; − is off at 0, + stays tappable when full to say why it can't go up.
 function altStepper(code) {
   const o = own(code), full = o.custom >= o.n;
-  return `<span class="stepper small alt"><button data-act="alt" data-code="${code}" data-d="-1" aria-label="Fewer alt art">−</button><span class="n">${o.custom}${o.n ? `<small> of ${o.n}</small>` : ''}</span><button data-act="alt" data-code="${code}" data-d="1" aria-label="More alt art" class="${full ? 'full' : ''}" title="${full ? 'All owned copies are alt art. Add a copy under Owned first.' : 'Mark one more owned copy as alt art'}">+</button></span>`;
+  return `<span class="stepper alt"><button data-act="alt" data-code="${code}" data-d="-1" aria-label="Fewer alt art" ${o.custom ? '' : 'disabled'}>−</button><span class="n">${o.custom}${o.n ? `<small>/${o.n}</small>` : ''}</span><button data-act="alt" data-code="${code}" data-d="1" aria-label="More alt art" class="${full ? 'full' : ''}" title="${full ? 'All owned copies are alt art. Add a copy under Owned first.' : 'Mark one more owned copy as alt art'}">+</button></span>`;
 }
 
 // What Alt art + says when every owned copy is already alt art.
