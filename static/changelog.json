@@ -1,6 +1,14 @@
 {
-  "checked": "2026-11-14.3",
+  "checked": "2026-11-15.1",
   "entries": [
+    {
+      "date": "2026-11-15",
+      "new": [],
+      "improved": [],
+      "fixed": [
+        { "v": "2026-11-15.1", "text": "Setup opens on your first visit even when you arrive through a link to another page, and stays until you finish or skip it." }
+      ]
+    },
     {
       "date": "2026-11-14",
       "new": [

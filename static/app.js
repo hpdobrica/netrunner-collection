@@ -529,8 +529,10 @@ function route() {
   try { UI.arg = decodeURIComponent(rest.join('/')); } catch { UI.arg = ''; }
   // Leaving the Collection list drops its "showing only" list and the row picked for typing counts.
   if (UI.view !== 'collection') { UI.only = null; UI.lfocus = null; }
-  // Setup is for the first run only; afterwards products are added on Add by set.
+  // Setup is for the first run only; afterwards products are added on Add by set. Until it is finished or
+  // skipped, every page leads to it, so a first visit through a link to another page still starts there.
   if (UI.view === 'welcome' && S.onboarded) { location.replace('#sets'); return; }
+  if (UI.view !== 'welcome' && !S.onboarded) { location.replace('#welcome'); return; }
   render();
 }
 
