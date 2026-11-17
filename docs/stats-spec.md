@@ -39,10 +39,9 @@ These terms are used the same way in every section below.
 
 - **Card count:** physical copies you own. Three copies of Hedge Fund count as 3. Alt-art copies count like any
   other copy.
-- **Printed proxies:** printed copies held by one deck, as decks saved by earlier versions recorded them. They are
-  never part of your collection, so they are left out of every count except *Proxies* (in section 3). Cards printed
-  now are added to the collection when their print job is marked done, and count like any other copy. Cards still in
-  the print queue aren't owned and count nowhere, except that *Short for saved decks* doesn't ask for them again.
+- **Printed cards:** added to the collection when their print job is marked done, and count like any other copy.
+  Cards still in the print queue aren't owned and count nowhere, except that *Short for saved decks* doesn't ask
+  for them again. (Printed copies held by one deck, which earlier versions recorded, were removed on 2026-11-17.)
 - **Playset:** a title's deck limit (`deck_limit` from NetrunnerDB). That's usually 3, and 1 for identities and
   "limit 1 per deck" cards.
 - **Set:** one product as listed in *Add by set*: a data pack, deluxe, big box or core set. Sets are grouped by
@@ -110,8 +109,7 @@ This answers "how much of my collection is tied up in decks?".
 
 - **Donut** of the card count:
   - **Free**;
-  - **In built decks**;
-  - with **Proxies** (printed copies in decks) as a separate number beside it, since they aren't part of the count.
+  - **In built decks**.
 - **Per built deck:** one bar per built deck showing the cards it borrows from your collection, largest first,
   with the deck's faction colour and name. Tapping one opens the deck.
 - **Short for saved decks:** the copies you'd need to print to build every unbuilt deck from free cards. This is
@@ -189,8 +187,7 @@ This answers "what would help me most?". Two short lists, top 10 each, with *Sho
 Use a test collection on another port, not real data.
 
 1. **Total:**
-   - 3× Hedge Fund (any printing) plus one alt-art Sure Gamble shows *Cards 4*, *Alt art 1*;
-   - a deck with 2 printed proxies doesn't change *Cards*.
+   - 3× Hedge Fund (any printing) plus one alt-art Sure Gamble shows *Cards 4*, *Alt art 1*.
 2. **Set %:**
    - every card in one pack at its boxed quantity shows 100%;
    - 1 of each card in a pack shows about 33%; one complete core set shows 100%;
@@ -200,8 +197,7 @@ Use a test collection on another port, not real data.
    - with the System Gateway Hedge Fund only, Core Set's Hedge Fund counts as 0/3.
 4. **Free vs in decks:**
    - build a deck that uses 2 of your 3 copies: free goes down by 2 and in-decks up by 2;
-   - unbuild it and both go back;
-   - proxies show separately.
+   - unbuild it and both go back.
 5. **Filters:**
    - Runner hides Corp sets' Corp cards and Corp factions;
    - *Hide rotated* drops rotated cycles;
