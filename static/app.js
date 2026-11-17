@@ -7,8 +7,7 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
   .replace(/[’‘`]/g, "'").replace(/[“”]/g, '"').toLowerCase().replace(/\s+/g, ' ').trim();
-// A looser key, only for matching names typed or pasted: no ™ or punctuation, ₂ read as 2. Card keys stay norm():
-// backups hold deck proxies by them.
+// A looser key, only for matching names typed or pasted: no ™ or punctuation, ₂ read as 2. Card keys stay norm().
 const loose = s => norm(String(s ?? '').replace(/[™®©]/g, '').normalize('NFKD')).replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim();
 const plural = (n, w, ws = w + 's') => `${n} ${n === 1 ? w : ws}`;
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -183,9 +182,8 @@ function migrate(s) {
     let id = typeof d.id === 'string' && /^[\w-]{1,64}$/.test(d.id) && !ids.has(d.id) ? d.id : uid();
     while (ids.has(id)) id = uid();
     ids.add(id);
-    const deck = { id, name: str(d.name), built: d.built === true, cards: {}, proxies: {}, source: '', notes: str(d.notes) };
+    const deck = { id, name: str(d.name), built: d.built === true, cards: {}, source: '', notes: str(d.notes) };
     for (const [code, q] of ownEntries(d.cards)) if (count(q)) deck.cards[code] = count(q);
-    for (const [key, q] of ownEntries(d.proxies)) if (count(q)) deck.proxies[key] = count(q);
     // Only the app sets source, always to a NetrunnerDB deck page.
     if (typeof d.source === 'string' && /^https:\/\/netrunnerdb\.com\/[\w/-]*$/i.test(d.source)) deck.source = d.source;
     if (isoDate(d.created)) deck.created = d.created;
@@ -350,7 +348,6 @@ function deckEntries(deck) {
     e.qty += q;
     m.set(card.key, e);
   }
-  for (const e of m.values()) e.proxies = Math.min(e.qty, deck.proxies?.[e.key] || 0);
   return [...m.values()];
 }
 
@@ -360,10 +357,8 @@ function computeLocks() {
   for (const d of S.decks) {
     if (!d.built) continue;
     for (const e of deckEntries(d)) {
-      const qty = e.qty - e.proxies;
-      if (qty <= 0) continue;
       if (!locks.has(e.key)) locks.set(e.key, []);
-      locks.get(e.key).push({ deck: d, qty });
+      locks.get(e.key).push({ deck: d, qty: e.qty });
     }
   }
   return locks;
@@ -376,11 +371,11 @@ const lockedQty = (locks, key, exclude) => (locks.get(key) || []).reduce((a, l) 
 // built, but they aren't asked for again; like owned ones, every deck can count on them.
 function planDeck(deck, locks = computeLocks(), queued = queuedByTitle()) {
   const rows = [];
-  const sum = { size: 0, have: 0, borrow: 0, print: 0, printing: 0, proxies: 0, decks: new Map(), printList: [] };
+  const sum = { size: 0, have: 0, borrow: 0, print: 0, printing: 0, decks: new Map(), printList: [] };
   for (const e of deckEntries(deck)) {
     const t = DB.titles.get(e.key);
     const owned = titleOwned(e.key), inQueue = queued.get(e.key) || 0;
-    const need = e.qty - e.proxies;
+    const need = e.qty;
     const others = (locks.get(e.key) || []).filter(l => l.deck !== deck);
     const elsewhere = others.reduce((a, l) => a + l.qty, 0);
     const have = Math.min(need, Math.max(0, owned - elsewhere));
@@ -398,7 +393,7 @@ function planDeck(deck, locks = computeLocks(), queued = queuedByTitle()) {
     const borrowN = need - have - printing - print;
     rows.push({ ...e, t, owned, need, have, borrow, borrowN, print, printing });
     if (t.type !== 'identity') sum.size += e.qty;
-    sum.have += have; sum.borrow += borrowN; sum.print += print; sum.printing += printing; sum.proxies += e.proxies;
+    sum.have += have; sum.borrow += borrowN; sum.print += print; sum.printing += printing;
     if (print) sum.printList.push({ t, n: print });
   }
   sum.status = sum.print ? 'print' : sum.printing ? 'printing' : sum.borrow ? 'borrow' : 'ok';
@@ -420,8 +415,6 @@ function deckAdjust(deck, key, d) {
   const q = (deck.cards[code] || 0) + d;
   if (q <= 0) delete deck.cards[code]; else deck.cards[code] = q;
   const total = deckEntries(deck).find(e => e.key === key)?.qty || 0;
-  if (deck.proxies?.[key] > total) deck.proxies[key] = total;
-  if (deck.proxies && !deck.proxies[key]) delete deck.proxies[key];
 }
 
 function deckText(deck) {
@@ -1033,8 +1026,8 @@ function statusText(sum, built) {
       [sum.print && `${sum.print} not owned`, sum.printing && `${sum.printing} being printed`,
         sum.borrow && `${sum.borrow} also in ${[...sum.decks.keys()].map(d => esc(deckName(d))).join(', ')}`].filter(Boolean).join(', ') + '.';
   }
-  if (built) return `Built: ${plural(sum.have, 'card')} borrowed from your collection${sum.proxies ? `, ${sum.proxies} printed` : ''}.`;
-  if (sum.status === 'ok') return `Ready to build from free cards${sum.proxies ? ` (plus ${sum.proxies} printed)` : ''}.`;
+  if (built) return `Built: ${plural(sum.have, 'card')} borrowed from your collection.`;
+  if (sum.status === 'ok') return 'Ready to build from free cards.';
   const parts = [];
   if (sum.borrow) parts.push(`take ${sum.borrow} from ${[...sum.decks.keys()].map(d => esc(deckName(d))).join(', ')}`);
   if (sum.print) parts.push(`print ${sum.print}`);
@@ -1127,7 +1120,6 @@ function planRow(r, deck) {
   if (r.print) status.push(`<span class="st print">print ${r.print}</span>`);
   if (r.printing) status.push(`<span class="st printing">${r.printing} printing</span>`);
   for (const b of r.borrow) status.push(`<span class="st borrow">take ${b.n} of the ${b.has} in <a href="#deck/${b.deck.id}">${esc(deckName(b.deck))}</a></span>`);
-  if (r.proxies) status.push(`<span class="st proxy">${r.proxies} printed${edit ? ` <button class="x" data-act="unproxy" data-key="${esc(r.key)}" title="Stop counting as printed">×</button>` : ''}</span>`);
   if (!r.print && !r.printing && !r.borrowN) status.push('<span class="st ok">✓</span>');
   return `<tr data-key="${esc(r.key)}">
     <td class="q">${edit ? stepper('deck-q', `data-key="${esc(r.key)}"`, r.qty) : r.qty + '×'}</td>
@@ -1636,7 +1628,7 @@ function statsFor(o) {
   const titleOk = t => titleVisible(t) && (!o.side || t.side === o.side) && !(o.hideRotated && t.rotated);
   // Draft identities aren't legal in normal decks, so the Draft product is not a set here.
   const packOk = p => pubOk(p) && p.cycle_code !== 'draft' && !(o.hideRotated && p.cycle?.rotated);
-  const s = { cards: 0, titles: 0, titlesAll: 0, playsets: 0, alt: 0, spare: 0, inDecks: 0, proxies: 0, unknown: 0,
+  const s = { cards: 0, titles: 0, titlesAll: 0, playsets: 0, alt: 0, spare: 0, inDecks: 0, unknown: 0,
     factions: new Map(), types: new Map(), sets: [], short: new Map(), deckBars: [], decks: 0 };
   const group = (m, k) => m.get(k) || m.set(k, { titles: 0, owned: 0, full: 0, cards: 0 }).get(k);
 
@@ -1682,7 +1674,6 @@ function statsFor(o) {
     const { rows, sum } = planDeck(d, locks);
     if (d.built) s.deckBars.push({ d, n: sum.have });
     for (const r of rows) {
-      if (titleOk(r.t)) s.proxies += r.proxies;
       if (!r.print) continue;
       // Each title once, at the most copies any one deck is short of.
       const x = s.short.get(r.key) || s.short.set(r.key, { t: r.t, n: 0, unbuilt: 0, decks: 0 }).get(r.key);
@@ -1800,8 +1791,7 @@ function statsDecks(s) {
     <h2>Free vs in decks</h2>
     <div class="sx-donut-row">
       ${donut([{ n: free, color: 'var(--accent)' }, { n: s.inDecks, color: 'var(--built)' }], s.cards)}
-      <ul class="sx-legend">${legend}
-        ${s.proxies ? `<li><span class="sx-sw proxy"></span>Proxies <b>${s.proxies}</b> <span class="muted">printed, not counted</span></li>` : ''}</ul>
+      <ul class="sx-legend">${legend}</ul>
     </div>
     ${!S.decks.length ? '<p class="muted">No decks yet. Add one under <a href="#decks">Decks</a>.</p>' : `
       <h3>Per built deck</h3>
@@ -2024,7 +2014,7 @@ function scoreDecklists() {
     const cards = {};
     let unknown = 0;
     for (const [code, q] of Object.entries(d.cards)) if (DB.byCode.has(code)) cards[code] = q; else unknown += q;
-    const deck = { cards, proxies: {} };
+    const deck = { cards };
     const { sum } = planDeck(deck, locks, queued);
     const id = deckIdentity(deck);
     return { d, cards, sum, id, unknown, legal: legalIn(cards, rules), side: id?.side || deckSide(deck), search: norm(d.name + ' ' + (id?.title || '') + ' ' + d.user) };
@@ -2211,7 +2201,7 @@ function renderModal() {
       }).join('')}
       </tbody></table>
       <h3>In decks</h3>
-      ${decks.length ? `<ul class="plain">${decks.map(({ d, e }) => `<li><a href="#deck/${d.id}" data-act="modal-close-nav">${esc(deckName(d))}</a>: ${e.qty}× ${d.built ? '<span class="pill built">Built</span>' : '<span class="muted">not built</span>'}${e.proxies ? ` (${e.proxies} printed)` : ''}</li>`).join('')}</ul>`
+      ${decks.length ? `<ul class="plain">${decks.map(({ d, e }) => `<li><a href="#deck/${d.id}" data-act="modal-close-nav">${esc(deckName(d))}</a>: ${e.qty}× ${d.built ? '<span class="pill built">Built</span>' : '<span class="muted">not built</span>'}</li>`).join('')}</ul>`
         : '<p class="muted">Not in any deck.</p>'}
       <p><a href="https://netrunnerdb.com/en/card/${shown.code}" target="_blank" rel="noopener">View on NetrunnerDB ↗</a></p>
     </div>
@@ -2403,7 +2393,7 @@ const act = {
       // Edited while a deck link was loading: this result is for a list that isn't in the box any more.
       if (UI.check.text !== text) return;
       if (!Object.keys(d.cards).length) throw new Error('No cards recognised in that list.');
-      C.result = { id: 'check', name: d.name || 'Checked deck', cards: d.cards, proxies: {}, unknown: d.unknown, source: d.source || '' };
+      C.result = { id: 'check', name: d.name || 'Checked deck', cards: d.cards, unknown: d.unknown, source: d.source || '' };
     } catch (e) { if (UI.check.text !== text) return; C.error = e.message; }
     render();
   },
@@ -2458,7 +2448,6 @@ const act = {
     $('#deck-add').focus();
   },
   'deck-group': el => { UI.deckGroup = el.dataset.v; store.set('deckGroup', UI.deckGroup); render(); },
-  'unproxy': el => { const deck = currentDeck(); delete deck.proxies[el.dataset.key]; save(); render(); },
   'show-print': () => {
     const { sum } = planDeck(currentDeck());
     showText('Cards to print', sum.printList.map(p => `${p.n}x ${p.t.title}`).join('\n'),
@@ -2602,7 +2591,7 @@ async function restoreFile(file) {
 }
 
 function newDeck(name, cards, source = '') {
-  const deck = { id: uid(), name, built: false, cards: { ...cards }, proxies: {}, source, notes: '', created: new Date().toISOString() };
+  const deck = { id: uid(), name, built: false, cards: { ...cards }, source, notes: '', created: new Date().toISOString() };
   S.decks.push(deck);
   save();
   return deck;
@@ -2611,8 +2600,7 @@ function newDeck(name, cards, source = '') {
 /* ---------- print queue ---------- */
 
 // Each PDF made goes into the print queue. Done adds its cards to the collection, as copies of the printing whose image
-// the PDF used: printed cards are cards you own like any other. Cancel drops it. (Decks saved by earlier versions may
-// still hold printed copies of their own, in deck.proxies.)
+// the PDF used: printed cards are cards you own like any other. Cancel drops it.
 const printQueue = () => S.printQueue || [];
 const jobSize = j => Object.values(j.cards).reduce((a, n) => a + n, 0);
 

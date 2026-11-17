@@ -221,7 +221,6 @@ table.list { width: 100%; border-collapse: collapse; }
 .st.ok { color: var(--ok); }
 .st.print { color: var(--bad); background: color-mix(in srgb, var(--bad) 15%, transparent); }
 .st.borrow { display: inline-block; line-height: 1.35; padding: 2px 8px; color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
-.st.proxy { color: var(--muted); background: var(--panel2); }
 .st button.x { min-height: 0; padding: 0 4px; border: 0; background: none; color: inherit; }
 .unknown pre { white-space: pre-wrap; color: var(--muted); font-size: 12px; }
 .deck-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
@@ -303,7 +302,6 @@ a.sx-row:hover { background: var(--panel2); }
 .sx-donut text { font-size: 7px; font-weight: 700; fill: var(--text); }
 .sx-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .sx-sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
-.sx-sw.proxy { border: 2px dashed var(--muted); }
 .sx-more { margin-top: 8px; }
 .only-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; padding: 6px 6px 6px 12px; border-radius: 6px; background: var(--panel2); }
 .only-note button { margin-left: auto; }
