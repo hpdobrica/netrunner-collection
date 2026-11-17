@@ -253,8 +253,9 @@ table.list { width: 100%; border-collapse: collapse; }
 /* A deck's groups are separate tables: fixed widths keep their columns in line. */
 @media (min-width: 641px) {
   .deck-page .list.compact { table-layout: fixed; }
-  .deck-page .list.compact td.q { width: 120px; }
-  body.locked .deck-page .list.compact td.q { width: 44px; }
+  /* Narrow, unless editing shows the +/- buttons. */
+  .deck-page .list.compact td.q { width: 44px; }
+  .deck-page.editing .list.compact td.q { width: 120px; }
   .deck-page .list.compact td.setno { width: 76px; }
   .deck-page .list.compact td:nth-child(4) { width: 90px; }
   .deck-page .list.compact td:nth-child(5) { width: 32%; }

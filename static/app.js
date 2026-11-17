@@ -539,10 +539,9 @@ function route() {
   render();
 }
 
-// Actions that change what you own, or the cards of a saved deck. A locked collection refuses them; new decks can
-// still be saved, and decks built, deconstructed, renamed and printed.
+// Actions that change what you own. A locked collection refuses them; decks aren't affected.
 const LOCKED_ACTS = new Set(['print-n', 'alt', 'pack-box', 'pack-clear', 'add-list-open', 'add-list', 'w-finish', 'restore',
-  'pq-done', 'deck-q', 'deck-add', 'unproxy', 'deck-delete']);
+  'pq-done']);
 const lockNote = '<p class="lock-note">Collection is locked, so counts can\'t be changed. Use the lock at the top to unlock it.</p>';
 const LOCK_SVG = {
   true: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
@@ -1139,13 +1138,12 @@ function planRow(r, deck) {
   </tr>`;
 }
 
-// A deck's cards change only after Edit cards (and never while the collection is locked), so a stray tap on a
-// deck page can't change it. Changes are saved as they're made, like everything else; the same button, now
-// Stop editing, just ends it (as do leaving the page and locking the collection).
-const deckEditing = deck => !S.locked && UI.deckEdit === deck.id;
+// A deck's cards change only after Edit cards, so a stray tap on a deck page can't change it. Changes are saved as
+// they're made, like everything else; the same button, now Stop editing, just ends it (as does leaving the page).
+// The collection lock doesn't apply: it guards owned counts only.
+const deckEditing = deck => UI.deckEdit === deck.id;
 
 function deckTools(deck) {
-  if (S.locked) return `<p class="lock-note">Collection is locked, so this deck's cards can't be changed. Use the lock at the top to unlock it.</p>`;
   const on = deckEditing(deck);
   return `<div class="deck-editing">
       <button class="${on ? 'primary' : ''}" data-act="deck-edit" aria-pressed="${on}">${on ? 'Stop editing' : 'Edit cards'}</button>
@@ -1164,7 +1162,7 @@ function viewDeck(app) {
   const id = deckIdentity(deck);
   const side = deckSide(deck);
   app.innerHTML = `
-  <div class="deck-page">
+  <div class="deck-page${deckEditing(deck) ? ' editing' : ''}">
     <a href="#decks" class="back">← Decks</a>
     <div class="deck-head">
       <div class="deck-id big">${id ? cardImg(id.newest.code, id.title) : '<span class="ph">No identity</span>'}</div>
@@ -1182,7 +1180,7 @@ function viewDeck(app) {
           ${sum.print ? `<button data-act="show-print">Print list (${sum.print})</button>` : ''}
           ${!deck.built && sum.print ? '' : '<button data-act="proxy-open">Print cards</button>'}
           <button data-act="copy-deck">Deck list</button>
-          ${S.locked ? '' : '<button class="danger" data-act="deck-delete">Delete</button>'}
+          <button class="danger" data-act="deck-delete">Delete</button>
         </div>
         <textarea class="notes" data-deck-field="notes" rows="2" placeholder="Notes (e.g. which sleeves, which alt arts)">${esc(deck.notes || '')}</textarea>
       </div>
@@ -2321,8 +2319,6 @@ const act = {
   },
   'lock': () => {
     S.locked = !S.locked;
-    // Locking ends editing a deck's cards; unlocking doesn't start it again.
-    if (S.locked) UI.deckEdit = null;
     save(false);
     render();
     toast(S.locked ? 'Collection locked. Counts can\'t be changed until you unlock it.' : 'Collection unlocked.');
@@ -2733,7 +2729,6 @@ document.addEventListener('click', e => {
       $('.menu').open = false;
       const a = el.dataset.act;
       return toast(a === 'restore' ? 'Collection is locked. Unlock it before restoring a backup.'
-        : a.startsWith('deck-') || a === 'unproxy' ? 'Collection is locked. Use the lock at the top to change this deck.'
         : 'Collection is locked. Use the lock at the top to change counts.');
     }
     act[el.dataset.act](el, e);

@@ -1,6 +1,14 @@
 {
-  "checked": "2026-11-15.5",
+  "checked": "2026-11-17.1",
   "entries": [
+    {
+      "date": "2026-11-17",
+      "new": [],
+      "improved": [
+        { "v": "2026-11-17.1", "text": "**Lock protects collection counts only.** The lock at the top now only stops changes to how many cards you own. Decks aren't affected: you can edit and delete them while the collection is locked, and a deck's cards still change only after Edit cards is pressed." }
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-11-15",
       "new": [],
