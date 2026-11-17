@@ -1,5 +1,5 @@
 {
-  "checked": "2026-11-17.2",
+  "checked": "2026-11-17.3",
   "entries": [
     {
       "date": "2026-11-17",
@@ -8,7 +8,9 @@
         { "v": "2026-11-17.2", "text": "**Unused proxy feature removed.** Decks no longer keep printed proxies of their own. Print cards for your collection directly instead: they join it when you mark their print job done." },
         { "v": "2026-11-17.1", "text": "**Lock protects collection counts only.** The lock at the top now only stops changes to how many cards you own. Decks aren't affected: you can edit and delete them while the collection is locked, and a deck's cards still change only after Edit cards is pressed." }
       ],
-      "fixed": []
+      "fixed": [
+        { "v": "2026-11-17.3", "text": "**No surprise keyboard.** On phones and tablets, the keyboard no longer pops up by itself after an update, on opening Collection, or on tapping Edit cards. Tap a search or card name field to type." }
+      ]
     },
     {
       "date": "2026-11-15",

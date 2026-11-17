@@ -3,6 +3,8 @@
 /* ---------- utilities ---------- */
 
 const $ = (sel, el = document) => el.querySelector(sel);
+// Focus a text field only where that doesn't pop up an on-screen keyboard (a mouse or trackpad, not a phone).
+const focusIfNoKeyboard = el => { if (el && matchMedia('(pointer: fine)').matches) el.focus(); };
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -834,7 +836,7 @@ function viewCollection(app) {
   const types = TYPES.filter(t => !f.side || (f.side === 'corp' ? !['event', 'hardware', 'resource', 'program'].includes(t) : !['agenda', 'asset', 'upgrade', 'operation', 'ice'].includes(t)));
   app.innerHTML = `
   <div class="toolbar">
-    <input type="search" id="q" placeholder="Search titles and card text…" value="${esc(f.q)}" autofocus>
+    <input type="search" id="q" placeholder="Search titles and card text…" value="${esc(f.q)}">
     <span class="seg">
       ${[['', 'All'], ['runner', 'Runner'], ['corp', 'Corp']].map(([v, l]) => `<button class="${f.side === v ? 'on' : ''}" data-act="f-side" data-v="${v}">${l}</button>`).join('')}
     </span>
@@ -856,6 +858,8 @@ function viewCollection(app) {
   ${UI.only?.codes || f.set ? `<p class="hint">Click a row, then type: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>0</kbd>–<kbd>9</kbd> count ·
     <kbd>+</kbd>/<kbd>−</kbd> adjust · <kbd>A</kbd>/<kbd>Shift+A</kbd> mark more / fewer copies as alt art</p>` : ''}
   <div id="results"></div>`;
+  // Search is focused when the app opens, on desktop only (as autofocus did, once per page load).
+  if (!viewCollection.focused) { viewCollection.focused = true; focusIfNoKeyboard($('#q')); }
   renderResults();
 }
 
@@ -2129,7 +2133,7 @@ function renderAddList(el) {
       <div id="add-list-out"></div>
     </div>
   </div>`;
-  $('#add-list-in').focus();
+  focusIfNoKeyboard($('#add-list-in'));
 }
 
 // The cards of the current page, in order: the whole filtered Collection list (not just the rows loaded so far),
@@ -2415,7 +2419,7 @@ const act = {
   // A new empty deck opens ready for cards.
   'deck-new': () => { const id = newDeck('New deck', {}).id; UI.deckEdit = id; location.hash = '#deck/' + id; },
   // Edit cards / Stop editing.
-  'deck-edit': () => { UI.deckEdit = UI.deckEdit === UI.arg ? null : UI.arg; render(); $('#deck-add')?.focus(); },
+  'deck-edit': () => { UI.deckEdit = UI.deckEdit === UI.arg ? null : UI.arg; render(); focusIfNoKeyboard($('#deck-add')); },
   'deck-build': () => {
     const deck = currentDeck(), { sum } = planDeck(deck);
     // Cards you don't own yet are printed first (Print cards); the button isn't offered then.
